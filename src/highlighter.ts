@@ -61,7 +61,7 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
     t0 = performance.now()
     // Rounds of runs from predicted starts, without tokens; then each chosen run again, with tokens. Lines with the
     // same text share runs, and lines with the same choice share the run with tokens.
-    const {prefixes, choices, rounds, runs} = await stitchLines(lines.length, rootKey, (which, starts) => runDriver(which.map((line, k) => ({line, start: starts[k]!})), false), lineGroups(lines))
+    const {prefixes, choices, rounds, runs} = await stitchLines(lines.length, rootKey, (which, starts) => runDriver(which.map((line, k) => ({line, start: starts[k]!})), false), lineGroups(lines), textOf.map(id => lengths[id]!))
     const tokenRun = new Map<number, number>()
     const tokenJobs: {line: number, start: FrameKey[]}[] = []
     choices.forEach((choice, line) => { if (!tokenRun.has(choice)) { tokenRun.set(choice, tokenJobs.length); tokenJobs.push({line, start: prefixes[line]!}) } })

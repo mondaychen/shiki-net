@@ -64,7 +64,9 @@ A push of a scope depends on the token attributes, and on which theme selectors 
   | That run means "the whole prefix popped" | 344 | 268 |
   | Validity by the frames read, jobs from the full predicted stack | 84 | 64 |
   | Lines with the same text share their runs | 20 | 64 |
+  | The prediction for an invalid line pops only the frames where its run agrees, then pushes what the run pushed | 10 | 14 |
 
+- **A prediction must not use what a run did past the frames that agree.** A run is the same as a run from the new start up to the moment when it reads the first frame that differs. So the line pops all the frames that agree. After that, the run's pops came from frames that the new start does not have. A run from a stack with extra `var` frames popped 6 frames where the true run pops 2, and the error went into every later prediction. With this rule, react-dom.development.js needs 9 rounds, not 347, and 6 when lines with the same text share their runs.
 - **A run that falls off its start must count as invalid.** A run that pops past the bottom of a short predicted stack has read a frame that its start does not have. The first version continued from a dummy frame and accepted the result. That error changed lodash line 1548, and the end-to-end check found it.
 - **Lines with the same text share their runs.** Without this, the same closer line (`  }`) failed again in each round, because each line kept only its own runs. With one trie of runs for each text, react-dom.development.js went from 347 rounds to 51, and react.development.js from 48 to 7. three.min.js has no lines with the same text, so it does not change. Idea 17 in ideas.md tells why the closers cost rounds.
 - **Data shapes the method.** In lodash, 84% of lines read only the top frame, and there are 15 distinct top frames. three.min.js is one large expression in 966 lines. Its lines read up to 16 frames deep, and it has 247 distinct start stacks.
@@ -103,24 +105,23 @@ The confusion of constants with wires came from handwired's `Wire` type. A wire 
 
 ## 9. Where the time goes
 
-The first version took 1.8 s for lodash and 4.1 s for three.min.js. Section 10 tells how they became 0.32 s and 0.98 s (shiki: about 0.48 s and 5.4 s). Now:
+The first version took 1.8 s for lodash and 4.1 s for three.min.js. Section 10 tells how they became 0.28 s and 0.71 s (shiki: about 0.42 s and 4.8 s). Now (the best of all runs for each part; stage A changes by up to 30% between runs on this machine):
 
 | | lodash | three.min.js | react-dom.development.js |
 | --- | --- | --- | --- |
-| Stage A | 0.16 s | 0.61 s | 0.40 s |
-| Driver rounds and the token run | 0.06 s | 0.33 s | 0.12 s |
-| Host stitch | 0.05 s | 0.01 s | 0.08 s |
+| Stage A | 0.18 s | 0.50 s | 0.39 s |
+| Driver rounds and the token run | 0.03 s | 0.15 s | 0.06 s |
+| Host stitch | 0.03 s | less than 0.01 s | 0.05 s |
 
 - lodash's stage A is limited by throughput: 7.7K distinct lines fill the GPU.
 - three.min.js's stage A is limited by its longest line (7,114 code points) at the end, when the other lines are complete.
-- react-dom.development.js's driver has 51 rounds (347 before lines with the same text shared their runs). [ideas.md](ideas.md) (idea 17) tells why.
-- three.min.js's driver has 64 rounds. A late round runs a line of about 500 code points, about 1,500 steps at about 2 µs per step. The first three rounds and the token run each wait for the longest line (about 9,000 steps).
+- The driver needs 10 rounds for lodash, 14 for three.min.js and 6 for react-dom.development.js. Rounds 1 and 2 run every line. On three.min.js, the first three rounds and the token run each wait for the longest line (about 9,000 steps).
 
 [ideas.md](ideas.md) has the ideas that we did not try.
 
 ## 10. Performance work
 
-The changes below took the network from 2.1 s to 0.32 s on lodash, and from 4.2 s to 0.98 s on three.min.js. Every change kept the output identical, and every check in the README passed after it.
+The changes below took the network from 2.1 s to 0.28 s on lodash, and from 4.2 s to 0.71 s on three.min.js. Every change kept the output identical, and every check in the README passed after it.
 
 ### How to measure
 
@@ -162,3 +163,11 @@ The changes below took the network from 2.1 s to 0.32 s on lodash, and from 4.2 
   - Two lines of a group with the same job in a round get one job. A string key of the prefix for this took most of the stitch's time, because prefixes can be 64 frames deep. Now the stitch compares the prefixes only with the other jobs of the same group in the round, and the stitch on lodash takes about 50 ms, as before.
   - The trie first kept the whole prefix of each job, up to 64 frames. The garbage collector then took most of the host's time. A run that agrees with a start in the frames that it read is valid, so a path needs only the frames that its run read. The best prediction does not change, because a run that agrees deeper than its read depth is valid.
 - **Jump over the lines that do not change.** A line that got no run in a round, and whose start is the same stack object, keeps its choice and its end. So do the lines after it, up to the next line that got a run. The walk jumps over them. The stitch on lodash went from 130 ms to 60 ms, with the same rounds.
+- **Predict a line only as far as its run agrees.** Section 6 tells the rule. Before lines with the same text shared their runs, the rounds went from 84 to 12 on lodash, from 64 to 14 on three.min.js, and from 347 to 9 on react-dom.development.js. With shared runs, they went from 20 to 10, from 64 to 14 and from 51 to 6. These predictors did not do better (rounds on lodash, react-dom.development.js and three.min.js):
+  - Agreement by rule, without the theme states: the same rounds.
+  - The pushed frames with their themes computed again on the new parent: 12, 9 and 13 rounds, but more runs.
+  - The most recent run when two runs agree equally: 31, 33 and 25.
+  - No change to the stack when no run agrees at the top: 36, 39 and 36.
+  - A table, learned from all runs, of the frames that pop when a pop reveals them: 13, 7 and 93. A wrong guess of a pop is expensive in three.min.js, whose lines read up to 16 frames.
+- **Send fewer start frames.** A job got up to 64 frames of its predicted start, so the host built and the GPU read many frames that no run reads. Now a job gets 16 frames, or the full stack when the line's runs read deeper. The rounds and the stitch on lodash went from about 92 ms to 53 ms, and on react-dom.development.js from about 150 ms to 84 ms. With 8 frames, three.min.js needed 23 rounds, not 14.
+- **A long line waits for an exact start.** A round lasts as long as its longest run. In TypeScript's scanner.ts, four lines of 4,657 to 10,366 code points got a different speculative start in rounds 2, 3 and 5, and each of those rounds took about 40 ms. Now a line of more than 1,000 code points that has three runs gets a job only when it is the first invalid line. The rounds and the stitch on scanner.ts went from about 160 ms to 110 ms, and the other fixtures did not change. With lines that share their runs, scanner.ts needs 5 rounds before and after these changes, but it now takes about 30 ms (about 4%) longer: its long lines need a third run, in round 3, of about 40 ms. Before, their second run, from a wrong deep stack, was valid by chance. A limit of two runs would remove this, but it makes three.min.js much slower (below). Two rules were worse: with two runs, or with a limit of 300 code points, three.min.js needed 43 or 389 rounds, because its long lines then waited for each other.

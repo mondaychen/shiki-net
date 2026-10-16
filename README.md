@@ -12,12 +12,12 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 | File | Lines | Tokens | Result | Network (GPU) | shiki (CPU) |
 | --- | --- | --- | --- | --- | --- |
-| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.32 s | 0.48 s |
-| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.98 s | 5.4 s |
-| [react@18.3.1 development](https://unpkg.com/react@18.3.1/umd/react.development.js) | 3,344 | 11,640 | identical | 0.08 s | 0.15 s |
-| [react-dom@18.3.1 development](https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js) | 29,925 | 102,423 | identical | 0.65 s | 1.47 s |
+| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.28 s | 0.42 s |
+| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.71 s | 4.8 s |
+| [react@18.3.1 development](https://unpkg.com/react@18.3.1/umd/react.development.js) | 3,344 | 11,640 | identical | 0.07 s | 0.13 s |
+| [react-dom@18.3.1 development](https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js) | 29,925 | 102,423 | identical | 0.56 s | 1.28 s |
 
-Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 30%.
+Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls, after one call to warm up. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 50%, mostly in stage A.
 
 ## Run
 
@@ -114,9 +114,11 @@ A line's run depends on its start stack only through the frames that it reads: t
 2. Walk the lines in order. A line is valid when its start agrees with its prediction in every frame that it read. A valid line's end is the next line's start.
 3. Run each invalid line again from its new predicted start. Repeat until a walk finds every line valid.
 
-The final chain is exact by induction: line 0 starts from the root, and a valid line's end is exact when its start is exact. Each round, the first invalid line has an exact start. Thus it is valid after its run, and the rounds stop. Most rounds run few lines.
+To predict the end of an invalid line, the walk uses the run whose start agrees with the new start in the most frames from the top. Until the run reads the first frame that differs, it is the same as a run from the new start. So the prediction pops the frames that agree, and then pushes what the run pushed. It does not use the run's pops past that frame, because they came from frames that the new start does not have.
 
-A run depends only on the line's text, the first-line flag and the frames that it read. So lines with the same text share their runs: a run of one `  }` line is also valid for every other `  }` line that has the same frames on top. Each group of these lines keeps its runs in a trie, by the frames that each run read, and two lines of a group with the same job in a round get one job. lodash needs 20 rounds, three.min.js 64 and react-dom.development.js 51. The token run also runs each chosen run only once. The host only compares frame keys and joins stacks. It does no tokenizing.
+The final chain is exact by induction: line 0 starts from the root, and a valid line's end is exact when its start is exact. Each round, the first invalid line has an exact start. Thus it is valid after its run, and the rounds stop. A bad prediction costs rounds, not correctness. A line of more than 1,000 code points that already has three runs waits until it is the first invalid line, because a round lasts as long as its longest run.
+
+A run depends only on the line's text, the first-line flag and the frames that it read. So lines with the same text share their runs: a run of one `  }` line is also valid for every other `  }` line that has the same frames on top. Each group of these lines keeps its runs in a trie, by the frames that each run read, and two lines of a group with the same job in a round get one job. lodash needs 10 rounds, three.min.js 14 and react-dom.development.js 6. The token run also runs each chosen run only once. The host only compares frame keys and joins stacks. It does no tokenizing.
 
 ### Decode
 
@@ -157,7 +159,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 
 ## Performance
 
-Stage A takes about half to two thirds of the time: 0.16 s for lodash and 0.61 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. lodash's 7.7K distinct lines fill the GPU, so its stage A is limited by throughput. three.min.js's stage A ends with its longest line alone, at about 26 µs per position. The driver takes 0.06 s for lodash and 0.33 s for three.min.js. On three.min.js, a late round lasts as long as its longest line, about 1,500 steps at about 2 µs per step. react-dom.development.js needs 51 rounds, because its predicted stacks become wrong before closing lines (docs/ideas.md, idea 17).
+Stage A takes about two thirds of the time: about 0.18 s for lodash and 0.50 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. lodash's 7.7K distinct lines fill the GPU, so its stage A is limited by throughput. three.min.js's stage A ends with its longest line alone, at about 26 µs per position. The driver takes 0.03 s for lodash and 0.15 s for three.min.js. A round lasts as long as its longest line. three.min.js's first rounds and its token run wait for its longest line, about 9,000 steps at about 2 µs per step (docs/ideas.md, ideas 11 and 20).
 
 [docs/lessons.md](docs/lessons.md) (section 10) tells what made the network four times faster than its first version, and what did not work.
 
