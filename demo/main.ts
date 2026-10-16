@@ -1,5 +1,6 @@
 // The demo page: the network on this browser's GPU and shiki on the CPU, side by side, and a comparison of their tokens.
 import type {ThemedToken} from '@shikijs/types'
+import type {BundledLanguage} from 'shiki'
 import {createGpuHighlighter} from '../src/highlighter.ts'
 import {deviceFrom} from '../src/gpu/device.ts'
 import {describeMachine} from './machine.ts'
@@ -13,6 +14,8 @@ const statusText = $<HTMLSpanElement>('#status-text')
 const output = $<HTMLPreElement>('#output')
 const edit = $<HTMLButtonElement>('#edit')
 const step = $<HTMLSpanElement>('#step')
+const lang = $<HTMLSelectElement>('#lang')
+const languageNames: Record<string, string> = {javascript: 'JavaScript', typescript: 'TypeScript'}
 
 const sample = `/**
  * Returns the sum of \`a\` and \`b\`.
@@ -31,6 +34,29 @@ class Counter extends EventTarget {
   get value() { return this.#count }
   increment = () => this.dispatchEvent(new CustomEvent('change', {detail: ++this.#count}))
 }
+`
+
+const sampleTs = `// A small store, with generics, overloads and a mapped type.
+export interface Entry<T> { readonly key: string; value: T; tags?: string[] }
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+export enum Mode { Read = 1 << 0, Write = 1 << 1 }
+
+export class Store<T extends object = {}> implements Iterable<Entry<T>> {
+  private entries = new Map<string, Entry<T>>()
+  constructor(private readonly mode: Mode = Mode.Read | Mode.Write) {}
+  get(key: string): T | undefined
+  get(key: string, fallback: T): T
+  get(key: string, fallback?: T) { return this.entries.get(key)?.value ?? fallback }
+  set<K extends string>(key: K, value: T): this {
+    if (!(this.mode & Mode.Write)) throw new Error(\`store is read-only: \${key}\`)
+    this.entries.set(key, {key, value} satisfies Entry<T>)
+    return this
+  }
+  *[Symbol.iterator]() { yield* this.entries.values() }
+}
+
+declare function assertKind<T>(value: unknown, kind: 'string'): asserts value is T
+const store = new Store<{n: number}>().set('a', {n: 1}) as Mutable<Store<{n: number}>>
 `
 
 // One column of results: its times. A time that is not ready yet shimmers.
@@ -125,10 +151,13 @@ edit.addEventListener('click', () => {
 const fileButtons = document.querySelectorAll<HTMLButtonElement>('[data-load]')
 const fileName = $<HTMLSpanElement>('#file-name')
 const fileInfo = $<HTMLSpanElement>('#file-info')
-const files: Record<string, {name: string, text: () => Promise<string>}> = {
-  sample: {name: 'sample.js', text: async () => sample},
-  lodash: {name: 'lodash.js', text: async () => (await import('../fixtures/lodash.js?raw')).default},
-  three: {name: 'three.min.js', text: async () => (await import('../fixtures/three.min.js?raw')).default},
+const files: Record<string, {name: string, lang: BundledLanguage, text: () => Promise<string>}> = {
+  sample: {name: 'sample.js', lang: 'javascript', text: async () => sample},
+  lodash: {name: 'lodash.js', lang: 'javascript', text: async () => (await import('../fixtures/lodash.js?raw')).default},
+  three: {name: 'three.min.js', lang: 'javascript', text: async () => (await import('../fixtures/three.min.js?raw')).default},
+  sampleTs: {name: 'sample.ts', lang: 'typescript', text: async () => sampleTs},
+  scanner: {name: 'scanner.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/scanner.ts?raw')).default},
+  es5: {name: 'lib.es5.d.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/lib.es5.d.ts?raw')).default},
 }
 const lineCount = () => `${code.value.split('\n').length.toLocaleString()} lines`
 let loading = 0
@@ -141,6 +170,7 @@ async function openFile(which: string) {
     else button.removeAttribute('aria-current')
   }
   fileName.textContent = file.name
+  lang.value = file.lang
   fileInfo.textContent = 'loading…'
   editor.dataset.loading = ''
   const text = await file.text()
@@ -184,12 +214,24 @@ async function main() {
   setStatus('Compiling the network’s weights from shiki’s grammar and theme, and its shaders…', 'busy')
   network.slot('setup').classList.add('pending')
   await paint()
-  const t0 = performance.now()
   const device = await deviceFrom(adapter)
   device.lost.then(info => setStatus(`The GPU device was lost: ${info.message}`, 'bad'))
-  const highlighter = await createGpuHighlighter(device)
-  const setupMs = performance.now() - t0
-  network.set('setup', ms(setupMs))
+  // One network per language, made the first time that language is highlighted: its weights come from that grammar.
+  const networks = new Map<string, {highlighter: Promise<Awaited<ReturnType<typeof createGpuHighlighter>>>, setupMs: number}>()
+  const networkFor = async (language: BundledLanguage) => {
+    let entry = networks.get(language)
+    if (!entry) {
+      const t0 = performance.now()
+      const made: {highlighter: Promise<Awaited<ReturnType<typeof createGpuHighlighter>>>, setupMs: number} = {highlighter: createGpuHighlighter(device, language), setupMs: 0}
+      made.highlighter.then(() => { made.setupMs = performance.now() - t0 }, () => networks.delete(language))
+      entry = made
+      networks.set(language, entry)
+    }
+    const highlighter = await entry.highlighter
+    network.set('setup', `${ms(entry.setupMs)} (${languageNames[language]})`)
+    return highlighter
+  }
+  await networkFor('javascript')
   setStatus('Ready. Press Highlight.')
   run.disabled = false
   if (!compare.checked) shikiOff()
@@ -202,11 +244,19 @@ async function main() {
   run.addEventListener('click', async () => {
     run.disabled = true
     for (const button of fileButtons) button.disabled = true
+    lang.disabled = true
     const withShiki = compare.checked
     try {
       const text = code.value
+      const language = lang.value as BundledLanguage
       setView('running')
-      setStatus('Running the network on the GPU…', 'busy')
+      if (!networks.has(language)) {
+        setStatus(`Compiling the ${languageNames[language]} network’s weights and shaders…`, 'busy')
+        network.slot('setup').classList.add('pending')
+        await paint()
+      }
+      const highlighter = await networkFor(language)
+      setStatus(`Running the ${languageNames[language]} network on the GPU…`, 'busy')
       network.clearTimes(true)
       if (withShiki) shiki.clearTimes(true)
       else shikiOff()
@@ -252,6 +302,7 @@ async function main() {
     } finally {
       run.disabled = false
       for (const button of fileButtons) button.disabled = false
+      lang.disabled = false
     }
   })
 }

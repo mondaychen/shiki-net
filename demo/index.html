@@ -16,18 +16,29 @@
         GitHub
       </a>
     </div>
-    <p>shiki's JavaScript tokenizer as a handwired neural network, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
+    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
   </header>
   <section class="picker">
     <nav class="files" aria-label="Input files">
+      <p class="group">JavaScript</p>
       <button data-load="sample" aria-current="true">sample.js</button>
       <button data-load="lodash">lodash.js</button>
       <button data-load="three">three.min.js</button>
+      <p class="group">TypeScript</p>
+      <button data-load="sampleTs">sample.ts</button>
+      <button data-load="scanner">scanner.ts</button>
+      <button data-load="es5">lib.es5.d.ts</button>
     </nav>
     <div class="editor">
       <div class="editor-head">
         <span id="file-name">sample.js</span>
         <span id="file-info"></span>
+        <label>Language
+          <select id="lang">
+            <option value="javascript">JavaScript</option>
+            <option value="typescript">TypeScript</option>
+          </select>
+        </label>
         <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
         <button id="edit" hidden>Edit</button>
         <button id="run" class="primary" disabled>Highlight</button>

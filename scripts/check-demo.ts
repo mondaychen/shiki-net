@@ -1,4 +1,5 @@
-// The demo page in a headless Chrome with WebGPU: the sample and both fixtures, each compared with shiki by the page.
+// The demo page in a headless Chrome with WebGPU: every file of its list, JavaScript and TypeScript, each compared
+// with shiki by the page.
 // Usage: node scripts/check-demo.ts [--built]. --built checks the page in dist/ (pnpm demo:build) and not the dev
 // server's. CHROME_PATH names another Chrome binary.
 import {createServer, preview} from 'vite'
@@ -29,7 +30,7 @@ try {
     return statusText()
   }
   console.log(await waitFor(/Ready|Error|no WebGPU|no GPU/, 60_000).catch(async () => `not ready after 60 s: ${await statusText()}`))
-  for (const which of ['sample', 'lodash', 'three']) {
+  for (const which of ['sample', 'lodash', 'three', 'sampleTs', 'scanner', 'es5']) {
     await page.click(`[data-load="${which}"]`)
     await page.waitForFunction(() => !document.querySelector('.editor')!.hasAttribute('data-loading'), {timeout: 60_000, polling: 100})
     await page.click('#run')

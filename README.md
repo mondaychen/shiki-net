@@ -38,7 +38,7 @@ pnpm demo:build    # writes the page to dist/, for a static host; the page is di
 
 At each push to `main`, `.github/workflows/pages.yml` builds the page and puts it on GitHub Pages.
 
-Use a recent Chrome, or another browser with WebGPU. The page compiles the weights and shaders in about 1.5 s. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The buttons load the sample and the two fixtures. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for the sample and the two fixtures. `pnpm check:demo --built` does the same for the page in `dist/`.
+Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The file list has a JavaScript sample and the two JavaScript fixtures, and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
 
 Each stage also has its own check. The table in [How the result is verified](#how-the-result-is-verified) gives the commands.
 
