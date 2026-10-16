@@ -36,14 +36,23 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
     const lines = tokenizedLines(code)
     if (lines.length === 0) return {tokens: decodeTokens(code, [], t.metaValues, tables.colorMap), timings: {stageA: 0, driver: 0, stitch: 0, decode: 0, rounds: 0, jobs: 0}}
     let t0 = performance.now()
-    const batch = batchLines(lines)
+    // A line's record depends only on its text, so stage A runs once for each distinct text, and a driver job reads the
+    // record of its line's text.
+    const textIds = new Map<string, number>()
+    const texts: string[] = []
+    const textOf = lines.map(line => {
+      let id = textIds.get(line)
+      if (id === undefined) { id = texts.length; textIds.set(line, id); texts.push(line) }
+      return id
+    })
+    const batch = batchLines(texts)
     const gpu = await stage.run(batch)
     const stageA = performance.now() - t0
-    const lengths = lines.map(line => [...line].length + 1)
+    const lengths = texts.map(text => [...text].length + 1)
     let driverMs = 0
     const runDriver = async (jobs: {line: number, start: FrameKey[]}[], tokens: boolean) => {
       const t1 = performance.now()
-      const out = await driver.run(gpu, lengths, jobs.map(job => ({...job, firstLine: job.line === 0})), {tokens})
+      const out = await driver.run(gpu, lengths, jobs.map(job => ({line: textOf[job.line]!, firstLine: job.line === 0, start: job.start})), {tokens})
       driverMs += performance.now() - t1
       // A run that hit its step limit or left more frames than the kernel returns is never taken as a result.
       for (const result of out) if (result.status !== 0) throw new Error(`a line run ended with status ${result.status}`)

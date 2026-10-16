@@ -419,7 +419,8 @@ export async function stitchLines(
     let nextFresh = 0
     jobs = []
     sharing = []
-    const roundJobs = new Set<string>()
+    // Per group, the prefixes of this round's jobs.
+    const roundJobs = new Map<number, number[][]>()
     let stack: Stack = starts[first]!
     for (let line = first; line < lineCount; line++) {
       if (!stack) stack = root
@@ -455,9 +456,13 @@ export async function stitchLines(
         const depth = needed > maxDepth ? stack.length : Math.min(stack.length, maxDepth)
         const prefix: number[] = []
         for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(node.key)
-        const jobKey = `${group}:${prefix.join(',')}`
-        if (roundJobs.has(jobKey)) sharing.push(line)
-        else { roundJobs.add(jobKey); jobs.push({line, prefix}) }
+        const groupJobs = roundJobs.get(group)
+        if (groupJobs?.some(other => other.length === prefix.length && other.every((key, i) => key === prefix[i]))) sharing.push(line)
+        else {
+          if (groupJobs) groupJobs.push(prefix)
+          else roundJobs.set(group, [prefix])
+          jobs.push({line, prefix})
+        }
         if (best >= 0) {
           // A run that popped past its prefix's bottom popped the whole prefix, and the predicted frames below come next.
           const {prefix: bestPrefix, result, pushed} = lineRuns[best]!
