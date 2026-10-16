@@ -16,7 +16,7 @@
         GitHub
       </a>
     </div>
-    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
+    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output. The full version is identical to shiki. The lite version is faster on long lines, and its tokens can differ from shiki's in rare cases.</p>
   </header>
   <section class="picker">
     <nav class="files" aria-label="Input files">
@@ -39,6 +39,12 @@
             <option value="typescript">TypeScript</option>
           </select>
         </label>
+        <label title="Full: identical to shiki. Lite: runs stage A on long lines as chunks of 512 positions with overlaps, which is faster; a match that needs text past an overlap can give a wrong token.">Version
+          <select id="version">
+            <option value="full">Full (exact)</option>
+            <option value="lite">Lite (faster)</option>
+          </select>
+        </label>
         <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
         <button id="edit" hidden>Edit</button>
         <button id="run" class="primary" disabled>Highlight</button>
@@ -57,7 +63,7 @@
       <header class="pane-head">
         <div>
           <h2>Network</h2>
-          <p class="where">Handwired neural network, on the GPU</p>
+          <p class="where">Handwired neural network, on the GPU<span id="version-note"></span></p>
         </div>
         <div class="total">
           <span class="total-label">Total time <span class="total-note">codeToTokens, without render</span></span>

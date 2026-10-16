@@ -19,6 +19,22 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls, after one call to warm up. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 50%, mostly in stage A.
 
+## The lite version
+
+`codeToTokens(code, {lite: true})` gives up exactness for time. Stage A runs each long line as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel, so a long line no longer sets the time of stage A. A bit near a kept position is wrong only when its match needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
+
+`pnpm check:lite` compares the lite version with shiki, character by character, and gives the times of the two versions:
+
+| File | Longest line | Characters as shiki | Full | Lite |
+| --- | --- | --- | --- | --- |
+| lodash@4.17.21 | 180 | 100% | 0.26 s | 0.27 s |
+| three@0.97.0 min | 7,113 | 100% | 0.82 s to 0.97 s | 0.63 s to 0.66 s |
+| scanner.ts (TypeScript) | 10,367 | 100% | 0.65 s | 0.35 s |
+
+On these fixtures, the lite version is identical to shiki. Overlaps of 8 and 16 positions gave 67 wrong characters on three.min.js, so the default overlaps have a margin of 8 times. A line shorter than about 700 code points runs as one unit in the two versions. So lodash and react.development.js do the same work in the two versions, and react-dom.development.js has only one line that changes. In Chrome, three.min.js went from 0.94 s to 0.71 s (best of five runs each).
+
+The lite version can also stop the host's rounds early, with `{lite: {maxRounds: k}}`. Each line that is not valid then runs from its predicted start. This is not in the default, because it was a bad trade: with 16 rounds, 1.3% of the characters of three.min.js were wrong, and the gain was smaller than the noise. [docs/lessons.md](docs/lessons.md) (section 10) gives the measurements.
+
 ## Run
 
 You need Node 24 or later, pnpm, and a GPU that WebGPU can use. The two handwired files that the code imports are in `vendor/handwired` (see its README).
@@ -38,7 +54,7 @@ pnpm demo:build    # writes the page to dist/, for a static host; the page is di
 
 At each push to `main`, `.github/workflows/pages.yml` builds the page and puts it on GitHub Pages.
 
-Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The file list has a JavaScript sample and the two JavaScript fixtures, and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
+Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The Version menu selects the full version or the lite version. For the lite version, the page also gives the percentage of characters that have shiki's color. The file list has a JavaScript sample and the two JavaScript fixtures, and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
 
 Each stage also has its own check. The table in [How the result is verified](#how-the-result-is-verified) gives the commands.
 
@@ -139,7 +155,8 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 | `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start | 0 differences |
 | `pnpm check:lines` | the host's stitch with the JS line driver, against `codeToTokens` | identical |
 | `pnpm test` | the full network on the GPU, against `codeToTokens` | identical |
-| `pnpm check:demo` | the demo page in a headless Chrome, which compares the network with shiki in the browser | identical |
+| `pnpm check:lite` | the lite version against `codeToTokens`, character by character, and the times of the two versions (all four fixtures) | 100% of characters |
+| `pnpm check:demo` | the demo page in a headless Chrome, which compares the network with shiki in the browser; and the lite version, which must not fail | identical |
 
 ## Grammar features and how the network covers them
 

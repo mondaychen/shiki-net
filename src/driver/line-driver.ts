@@ -367,12 +367,18 @@ const trieNode = (): Trie => ({next: null, valid: -1, first: -1})
 //
 // `runLines` gets one line of each job's group. In the result, `choices` names each line's run: lines with the same
 // choice have the same tokens.
+//
+// With `maxRounds`, the lite version stops after that many rounds, although some lines are not valid. Such a line
+// gets no run: its prefix is its whole predicted start, its result is undefined, and its choice is a new id that the
+// lines with the same job share. The caller runs it from that start. The chain is then not exact past the first such
+// line, but the predicted starts are usually correct in the top frames, which most lines read.
 export async function stitchLines(
   lineCount: number, rootKey: FrameKey,
   runLines: (lines: number[], starts: FrameKey[][]) => Promise<LineResult[]>,
   groupOf: ArrayLike<number> = Array.from({length: lineCount}, (_, line) => line),
   lengths: ArrayLike<number> = [], maxDepth = 16, longLine = 1000,
-): Promise<{results: LineResult[], prefixes: FrameKey[][], choices: number[], rounds: number, runs: number}> {
+  maxRounds = Infinity,
+): Promise<{results: (LineResult | undefined)[], prefixes: FrameKey[][], choices: number[], rounds: number, runs: number}> {
   // Keys are interned by a number made of their fields: names and themes are below 2^16, and the end variant below 16.
   const keyIds = new Map<number, number>()
   const keys: FrameKey[] = []
@@ -429,8 +435,11 @@ export async function stitchLines(
     sharing = []
     waiting = []
     let exact = true
-    // Per group, the prefixes of this round's jobs.
-    const roundJobs = new Map<number, number[][]>()
+    // Per group, the prefixes of this round's jobs and the jobs' indices.
+    const roundJobs = new Map<number, {prefix: number[], job: number}[]>()
+    // The last round of the lite version: invalid lines keep their whole predicted start, and get no run.
+    const last = rounds >= maxRounds
+    const jobOf = last ? new Map<number, number>() : null
     let stack: Stack = starts[first]!
     for (let line = first; line < lineCount; line++) {
       if (!stack) stack = root
@@ -465,15 +474,21 @@ export async function stitchLines(
         stack = next
       } else {
         const needed = best >= 0 ? lineRuns[best]!.result.readDepth : 1
-        const depth = needed > maxDepth ? stack.length : Math.min(stack.length, maxDepth)
+        const depth = needed > maxDepth || last ? stack.length : Math.min(stack.length, maxDepth)
         const prefix: number[] = []
         for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(node.key)
         const groupJobs = roundJobs.get(group)
-        if (groupJobs?.some(other => other.length === prefix.length && other.every((key, i) => key === prefix[i]))) sharing.push(line)
-        else if (!exact && lineRuns.length >= 3 && lengths[line]! > longLine) waiting.push(line)
-        else {
-          if (groupJobs) groupJobs.push(prefix)
-          else roundJobs.set(group, [prefix])
+        const same = groupJobs?.find(other => other.prefix.length === prefix.length && other.prefix.every((key, i) => key === prefix[i]))
+        if (same) {
+          sharing.push(line)
+          jobOf?.set(line, same.job)
+        } else if (!exact && !last && lineRuns.length >= 3 && lengths[line]! > longLine) {
+          waiting.push(line)
+        } else {
+          const job = {prefix, job: jobs.length}
+          if (groupJobs) groupJobs.push(job)
+          else roundJobs.set(group, [job])
+          jobOf?.set(line, jobs.length)
           jobs.push({line, prefix})
         }
         exact = false
@@ -490,11 +505,11 @@ export async function stitchLines(
       }
       ends[line] = stack
     }
-    if (jobs.length === 0) {
+    if (jobs.length === 0 || jobOf) {
       return {
-        results: chosen.map((k, line) => runs[groupOf[line]!]![k]!.result),
-        prefixes: chosen.map((k, line) => runs[groupOf[line]!]![k]!.keys),
-        choices: chosen.map((k, line) => runs[groupOf[line]!]![k]!.id),
+        results: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.result : undefined),
+        prefixes: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.keys : jobs[jobOf!.get(line)!]!.prefix.map(id => keys[id]!)),
+        choices: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.id : total + jobOf!.get(line)!),
         rounds, runs: total,
       }
     }

@@ -171,3 +171,21 @@ The changes below took the network from 2.1 s to 0.28 s on lodash, and from 4.2 
   - A table, learned from all runs, of the frames that pop when a pop reveals them: 13, 7 and 93. A wrong guess of a pop is expensive in three.min.js, whose lines read up to 16 frames.
 - **Send fewer start frames.** A job got up to 64 frames of its predicted start, so the host built and the GPU read many frames that no run reads. Now a job gets 16 frames, or the full stack when the line's runs read deeper. The rounds and the stitch on lodash went from about 92 ms to 53 ms, and on react-dom.development.js from about 150 ms to 84 ms. With 8 frames, three.min.js needed 23 rounds, not 14.
 - **A long line waits for an exact start.** A round lasts as long as its longest run. In TypeScript's scanner.ts, four lines of 4,657 to 10,366 code points got a different speculative start in rounds 2, 3 and 5, and each of those rounds took about 40 ms. Now a line of more than 1,000 code points that has three runs gets a job only when it is the first invalid line. The rounds and the stitch on scanner.ts went from about 160 ms to 110 ms, and the other fixtures did not change. With lines that share their runs, scanner.ts needs 5 rounds before and after these changes, but it now takes about 30 ms (about 4%) longer: its long lines need a third run, in round 3, of about 40 ms. Before, their second run, from a wrong deep stack, was valid by chance. A limit of two runs would remove this, but it makes three.min.js much slower (below). Two rules were worse: with two runs, or with a limit of 300 code points, three.min.js needed 43 or 389 rounds, because its long lines then waited for each other.
+
+### The lite version
+
+The lite version (README, "The lite version") gives up exactness. `pnpm check:lite` measures how many characters have shiki's color and font style.
+
+- **Chunks of long lines in stage A worked.** Stage A on three.min.js went from about 530 ms to about 300 ms, with chunks of 512 positions and overlaps of 32 to 64 positions before and 64 to 128 after. Chunks of 1,024 and 2,048 gave about 350 ms, and chunks of 128 gave 350 ms, because of the overlaps' extra work. With chunks, stage A of three.min.js is limited by throughput, not by its longest line.
+- **The overlaps can be small.** All overlaps from 16/32 to 64/256 gave output identical to shiki on all fixtures. With 8/16, 67 characters of three.min.js were wrong. With 4/8 and less, a walk lost its path and its run hit the step limit. So the lite version runs stage A again, without chunks, for the lines whose runs fail. With no overlap, the result was then 99.2% correct.
+- **Stopping the rounds early was a bad trade.** After k rounds, each line that is not valid runs with tokens from its predicted start. The percentage of correct characters:
+
+  | Rounds | lodash | three.min.js | react | react-dom |
+  | --- | --- | --- | --- | --- |
+  | 4 | 98.23% | 96.74% | 99.70% | 99.79% |
+  | 8 | 99.92% | 97.44% | 100% | 100% |
+  | 16 | 99.987% | 98.70% | 100% | 100% |
+  | 32 | 100% | 99.62% | 100% | 100% |
+
+  The errors are not in a few lines. In lodash, whole lines of jsdoc examples lost their comment color, because the predicted start had no comment frame. In three.min.js, about 10 characters of many lines were wrong: `function` had the color of a function name, because a frame below the top was wrong. The time gain was small, because the late rounds are short. Only three.min.js gained, about 100 ms to 150 ms, and that was near the noise. react-dom needs 51 rounds, but its output is already identical after 8: its late rounds only make the frames below the top correct.
+- **Order changes the times.** When the lite version always ran second, it was up to 25% slower on files where it does the same work as the full version. `check:lite` now changes the order in each repeat.
