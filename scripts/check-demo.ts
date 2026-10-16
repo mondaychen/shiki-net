@@ -29,10 +29,21 @@ try {
   console.log(await waitFor(/Ready|Error|no WebGPU|no GPU/, 60_000).catch(async () => `not ready after 60 s: ${await statusText()}`))
   for (const which of ['sample', 'lodash', 'three']) {
     await page.click(`[data-load="${which}"]`)
-    if (which !== 'sample') await waitFor(/Loaded/)
+    await page.waitForFunction(() => !document.querySelector('.editor')!.hasAttribute('data-loading'), {timeout: 60_000, polling: 100})
     await page.click('#run')
     const result = await waitFor(/Identical|differ|Error/)
-    const rows = await page.$$eval('#timings tbody tr', trs => trs.map(tr => [...tr.children].map(td => td.textContent).join(': ')))
+    const rows = await page.$$eval('.pane', panes => panes.flatMap(pane => [
+      `${pane.querySelector('h2')!.textContent}, total: ${pane.querySelector('[data-slot="total"]')!.textContent}`,
+      ...[...pane.querySelectorAll('.breakdown dl > div')].map(row => `  ${row.querySelector('dt')!.textContent}: ${row.querySelector('dd')!.textContent}`),
+    ]))
+    // The code container now shows the network's tokens in place of the textarea, with the same text.
+    const shown = await page.evaluate(() => {
+      const output = document.querySelector<HTMLPreElement>('#output')!
+      return document.querySelector<HTMLElement>('.editor')!.dataset.view === 'highlighted' && !output.hidden && output.textContent === document.querySelector<HTMLTextAreaElement>('#code')!.value
+    })
+    if (!shown) { console.log('the code container does not show the highlighted code'); failed = true }
+    // Times shimmer while they are not ready; when the status says the run is done, none can still shimmer.
+    if (await page.$('.pending')) { console.log('a time is still pending after the run'); failed = true }
     console.log(`${which}: ${result}\n  ${rows.join('\n  ')}`)
     if (!/Identical/.test(result)) failed = true
   }

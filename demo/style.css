@@ -6,6 +6,10 @@
   --accent: #0969da;
   --ok: #1a7f37;
   --bad: #cf222e;
+  --surface: #f6f8fa;
+  --shimmer: #e6eaef;
+  --hover: #eaeef2;
+  --selected: #ddf4ff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -16,13 +20,23 @@
     --accent: #4493f8;
     --ok: #3fb950;
     --bad: #f85149;
+    --surface: #151b23;
+    --shimmer: #262c36;
+    --hover: #212830;
+    --selected: #121d2f;
   }
 }
 * { box-sizing: border-box; }
+/* The page fills the window: the code takes the height that the other rows leave, and the times stay at the bottom.
+   When the window is too short for the code's minimum height, the page scrolls. */
 body {
+  display: grid;
+  grid-template-rows: auto minmax(280px, 1fr) auto auto;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
-  max-width: 1100px;
-  padding: 24px 16px 48px;
+  max-width: 1440px;
+  padding: 20px 16px 16px;
   background: var(--bg);
   color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, sans-serif;
@@ -30,8 +44,6 @@ body {
 h1 { margin: 0 0 4px; font-size: 24px; }
 header p { margin: 0 0 16px; color: var(--muted); }
 code, textarea, pre { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
-.buttons label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
 button {
   font: inherit;
   padding: 5px 12px;
@@ -43,27 +55,176 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; margin-left: auto; }
-textarea {
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* The input: a list of files at the left, the code of the selected file at the right. */
+.picker {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  border: 1px dashed var(--border);
+}
+.files {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  background: var(--surface);
+  border-right: 1px dashed var(--border);
+}
+.files button {
+  display: flex;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  color: var(--fg);
+  font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.files button::before { content: "·"; color: var(--muted); }
+.files button:hover { background: var(--hover); }
+.files button[aria-current="true"] { background: var(--selected); color: var(--accent); }
+.files button[aria-current="true"]::before { color: var(--accent); }
+.editor { display: flex; flex-direction: column; min-width: 0; }
+.editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px dashed var(--border);
+}
+#file-name { font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+#file-info { color: var(--muted); font-size: 13px; margin-right: auto; }
+.editor-head label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+/* The textarea and the highlighted code fill the same box, with the same font and padding, so the lines stay in place. */
+.editor-body { position: relative; flex: 1; min-height: 0; }
+.editor-body textarea, .editor-body pre {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 180px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  height: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+  overflow: auto;
+  resize: none;
   background: var(--bg);
   color: var(--fg);
-  resize: vertical;
 }
-#status { min-height: 1.5em; }
+.editor-body [hidden] { display: none; }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.running {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+.editor[data-view="running"] .running { display: flex; }
+.running-badge {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+@media (max-width: 860px) {
+  body { grid-template-rows: auto minmax(440px, 1fr) auto auto; }
+  .picker { grid-template-columns: minmax(0, 1fr); }
+  .files { flex-direction: row; overflow-x: auto; padding: 0; border-right: 0; border-bottom: 1px dashed var(--border); }
+  .files button { flex: none; }
+}
+#status { display: flex; gap: 8px; align-items: center; min-height: 1.5em; margin: 8px 0; }
+#status .spinner { display: none; }
+#status.busy .spinner { display: inline-block; }
 #status.ok { color: var(--ok); }
 #status.bad { color: var(--bad); }
-#timings { border-collapse: collapse; margin: 0 0 12px; font-variant-numeric: tabular-nums; }
-#timings th, #timings td { text-align: left; padding: 2px 16px 2px 0; border-bottom: 1px solid var(--border); }
-#timings th { color: var(--muted); font-weight: normal; }
-pre {
-  margin: 0;
-  padding: 12px;
-  border-radius: 6px;
-  overflow: auto;
-  max-height: 70vh;
+
+.spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The two columns share their rows, so the outputs start at the same height. */
+.results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr;
+  gap: 0 16px;
+}
+.pane {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+@media (max-width: 860px) {
+  .results { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .pane { grid-row: auto; grid-template-rows: auto; }
+}
+
+.pane[data-state="off"] { opacity: 0.6; }
+.pane-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+h2 { margin: 0; font-size: 18px; }
+.where { margin: 0; color: var(--muted); font-size: 13px; }
+.total { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.total-label { white-space: nowrap; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.total-note { font-weight: normal; letter-spacing: 0; text-transform: none; }
+.total-note::before { content: "· "; }
+.total .value { font-size: 24px; font-weight: 650; line-height: 1.2; }
+
+.breakdown { padding: 8px 14px 10px; font-size: 13px; line-height: 1.4; }
+.breakdown-title { margin: 0 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.breakdown dl { margin: 0; }
+.breakdown dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 0 1px 12px;
+  border-left: 2px solid var(--border);
+}
+.breakdown dt .detail { color: var(--muted); }
+.breakdown dd { margin: 0; }
+.breakdown .note { margin: 0; color: var(--muted); }
+.setup {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 0;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  color: var(--muted);
+}
+.value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* A time that is not ready yet: a shimmering bar in place of the number. */
+.value.pending {
+  display: inline-block;
+  min-width: 4.5em;
+  color: transparent;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--shimmer) 25%, var(--surface) 50%, var(--shimmer) 75%) 0 0 / 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }

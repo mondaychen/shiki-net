@@ -12,22 +12,68 @@
     <h1>shiki-net</h1>
     <p>shiki's JavaScript tokenizer as a handwired neural network, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
   </header>
-  <section class="controls">
-    <div class="buttons">
-      <button data-load="sample">Sample</button>
-      <button data-load="lodash">lodash.js (17,210 lines)</button>
-      <button data-load="three">three.min.js (967 long lines)</button>
-      <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
-      <button id="run" class="primary" disabled>Highlight</button>
+  <section class="picker">
+    <nav class="files" aria-label="Input files">
+      <button data-load="sample" aria-current="true">sample.js</button>
+      <button data-load="lodash">lodash.js</button>
+      <button data-load="three">three.min.js</button>
+    </nav>
+    <div class="editor">
+      <div class="editor-head">
+        <span id="file-name">sample.js</span>
+        <span id="file-info"></span>
+        <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
+        <button id="edit" hidden>Edit</button>
+        <button id="run" class="primary" disabled>Highlight</button>
+      </div>
+      <div class="editor-body">
+        <textarea id="code" spellcheck="false" wrap="off" aria-labelledby="file-name"></textarea>
+        <pre id="output" hidden aria-labelledby="file-name"></pre>
+        <div class="running"><div class="running-badge"><span class="spinner"></span><span id="step"></span></div></div>
+      </div>
     </div>
-    <textarea id="code" spellcheck="false"></textarea>
   </section>
-  <p id="status">Loading…</p>
-  <table id="timings" hidden>
-    <thead><tr><th>Step</th><th>Time</th></tr></thead>
-    <tbody></tbody>
-  </table>
-  <pre id="output"></pre>
+  <p id="status" class="busy" role="status"><span class="spinner"></span><span id="status-text">Loading…</span></p>
+  <section class="results">
+    <article class="pane" id="network" data-state="idle">
+      <header class="pane-head">
+        <div>
+          <h2>Network</h2>
+          <p class="where">Handwired neural network, on the GPU</p>
+        </div>
+        <div class="total">
+          <span class="total-label">Total time <span class="total-note">codeToTokens, without render</span></span>
+          <span class="value" data-slot="total">—</span>
+        </div>
+      </header>
+      <div class="breakdown">
+        <p class="breakdown-title">Parts of the total</p>
+        <dl>
+          <div><dt>Stage A: the regex network</dt><dd class="value" data-slot="stageA">—</dd></div>
+          <div><dt>Stage B: the driver network <span class="detail" data-slot="driverDetail"></span></dt><dd class="value" data-slot="driver">—</dd></div>
+          <div><dt>Host: stitch the lines</dt><dd class="value" data-slot="stitch">—</dd></div>
+          <div><dt>Decode to tokens</dt><dd class="value" data-slot="decode">—</dd></div>
+        </dl>
+        <p class="setup"><span>Not in the total: one-time setup of weights and shaders</span><span class="value" data-slot="setup">—</span></p>
+      </div>
+    </article>
+    <article class="pane" id="shiki" data-state="idle">
+      <header class="pane-head">
+        <div>
+          <h2>shiki</h2>
+          <p class="where">Oniguruma regex engine (WASM), on the CPU</p>
+        </div>
+        <div class="total">
+          <span class="total-label">Total time <span class="total-note">codeToTokens, without render</span></span>
+          <span class="value" data-slot="total">—</span>
+        </div>
+      </header>
+      <div class="breakdown">
+        <p class="breakdown-title">Parts of the total</p>
+        <p class="note">One step: shiki's <code>codeToTokens</code>, in the main thread of this page. It runs after the network, so the two do not share the machine. The code above shows the network’s tokens.</p>
+      </div>
+    </article>
+  </section>
   <script type="module" src="./main.ts"></script>
 </body>
 </html>
