@@ -1,11 +1,13 @@
 // The demo page in a headless Chrome with WebGPU: the sample and both fixtures, each compared with shiki by the page.
-// Usage: node scripts/check-demo.ts. CHROME_PATH names another Chrome binary.
-import {createServer} from 'vite'
+// Usage: node scripts/check-demo.ts [--built]. --built checks the page in dist/ (pnpm demo:build) and not the dev
+// server's. CHROME_PATH names another Chrome binary.
+import {createServer, preview} from 'vite'
 import puppeteer from 'puppeteer-core'
 
 const chromePath = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-const server = await createServer({server: {port: 0, open: false}, logLevel: 'error'})
-await server.listen()
+const server = process.argv.includes('--built')
+  ? await preview({preview: {port: 0, open: false}, logLevel: 'error'})
+  : await (await createServer({server: {port: 0, open: false}, logLevel: 'error'})).listen()
 const base = server.resolvedUrls!.local[0]!
 const browser = await puppeteer.launch({
   executablePath: chromePath,

@@ -29,9 +29,10 @@ pnpm typecheck     # tsc, with handwired's imported code included
 
 ```sh
 pnpm demo          # Vite opens http://localhost:5173/demo/ in your browser
+pnpm demo:build    # writes the page to dist/, for a static host; the page is dist/demo/index.html
 ```
 
-Use a recent Chrome, or another browser with WebGPU. The page compiles the weights and shaders in about 1.5 s. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The buttons load the sample and the two fixtures. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for the sample and the two fixtures.
+Use a recent Chrome, or another browser with WebGPU. The page compiles the weights and shaders in about 1.5 s. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The buttons load the sample and the two fixtures. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for the sample and the two fixtures. `pnpm check:demo --built` does the same for the page in `dist/`.
 
 Each stage also has its own check. The table in [How the result is verified](#how-the-result-is-verified) gives the commands.
 

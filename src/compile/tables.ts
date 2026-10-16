@@ -54,6 +54,16 @@ export const scannerKey = (rule: number, endVariant: number, allowA: boolean, al
 
 const endRuleId = -1
 
+// vscode-textmate's rule class, from the fields that only that class declares. A minified build (the demo's) renames
+// the classes, so `constructor.name` doesn't work there.
+const ruleClass = (rule: object): string =>
+  '_match' in rule ? 'MatchRule'
+  : '_end' in rule ? 'BeginEndRule'
+  : '_while' in rule ? 'BeginWhileRule'
+  : 'retokenizeCapturedWithRuleId' in rule ? 'CaptureRule'
+  : 'patterns' in rule ? 'IncludeOnlyRule'
+  : 'unknown'
+
 export async function compileTables(lang: BundledLanguage = 'javascript', theme: BundledTheme = 'github-dark'): Promise<Tables> {
   const highlighter = await createHighlighter({themes: [theme], langs: [lang]})
   // Compiles the root rule and, through it, every rule it can reach.
@@ -88,7 +98,7 @@ export async function compileTables(lang: BundledLanguage = 'javascript', theme:
     const known = rules.get(id)
     if (known) return known
     const rule = grammar._ruleId2desc[id]
-    const kindName = rule.constructor.name
+    const kindName = ruleClass(rule)
     if (rule._nameIsCapturing || rule._contentNameIsCapturing) throw new Error(`rule ${id} has a name with $n`)
     let info: RuleInfo
     if (kindName === 'MatchRule') {
@@ -124,8 +134,7 @@ export async function compileTables(lang: BundledLanguage = 'javascript', theme:
         const patterns = compiled.regExps.map((source: string, index: number) => {
           const matched = compiled.rules[index] as number
           if (matched !== endRuleId) {
-            ruleOf(matched)
-            if (grammar._ruleId2desc[matched].constructor.name === 'BeginEndRule' && !queued.has(matched)) {
+            if (ruleOf(matched).kind === 'beginEnd' && !queued.has(matched)) {
               queued.add(matched)
               pending.push(matched)
             }
