@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>shiki-net</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>shiki-net</h1>
+    <p>shiki's JavaScript tokenizer as a handwired neural network, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
+  </header>
+  <section class="controls">
+    <div class="buttons">
+      <button data-load="sample">Sample</button>
+      <button data-load="lodash">lodash.js (17,210 lines)</button>
+      <button data-load="three">three.min.js (967 long lines)</button>
+      <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
+      <button id="run" class="primary" disabled>Highlight</button>
+    </div>
+    <textarea id="code" spellcheck="false"></textarea>
+  </section>
+  <p id="status">Loading…</p>
+  <table id="timings" hidden>
+    <thead><tr><th>Step</th><th>Time</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <pre id="output"></pre>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

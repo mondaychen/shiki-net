@@ -1,0 +1,51 @@
+{
+  "name": "shiki-net",
+  "version": "1.0.0",
+  "description": "shiki's JavaScript tokenizer as a handwired neural network on the GPU, identical to shiki's codeToTokens",
+  "scripts": {
+    "test": "node scripts/check-gpu.ts",
+    "typecheck": "tsc -p .",
+    "check:engine": "scripts/deep-stack.sh scripts/check-engine.ts",
+    "check:driver": "scripts/deep-stack.sh scripts/check-driver.ts",
+    "check:stage-a": "scripts/deep-stack.sh scripts/check-stage-a.ts",
+    "check:stage-a-gpu": "node scripts/check-stage-a-gpu.ts",
+    "check:circuit": "node scripts/check-circuit.ts",
+    "check:driver-gpu": "node scripts/check-driver-gpu.ts",
+    "check:lines": "node scripts/check-lines.ts",
+    "time:stage-a": "node scripts/time-phases.ts",
+    "time:driver": "node scripts/time-driver.ts",
+    "extract-named-sets": "node scripts/extract-named-sets.ts",
+    "demo": "vite",
+    "demo:build": "vite build",
+    "check:demo": "node scripts/check-demo.ts"
+  },
+  "author": "",
+  "license": "MIT",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.11.2",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.11.2",
+  "type": "module",
+  "dependencies": {
+    "@shikijs/engine-oniguruma": "4.5.0",
+    "@shikijs/langs": "4.5.0",
+    "@shikijs/themes": "4.5.0",
+    "@shikijs/types": "4.5.0",
+    "@shikijs/vscode-textmate": "10.0.2",
+    "oniguruma-parser": "0.12.2",
+    "shiki": "4.5.0",
+    "webgpu": "^0.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@webgpu/types": "^0.1.74",
+    "puppeteer-core": "^25.14.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  },
+  "private": true
+}
