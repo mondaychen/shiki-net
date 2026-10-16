@@ -13,6 +13,7 @@
     "check:circuit": "node scripts/check-circuit.ts",
     "check:driver-gpu": "node scripts/check-driver-gpu.ts",
     "check:lines": "node scripts/check-lines.ts",
+    "check:lite": "node scripts/check-lite.ts",
     "time:stage-a": "node scripts/time-phases.ts",
     "time:driver": "node scripts/time-driver.ts",
     "extract-named-sets": "node scripts/extract-named-sets.ts",

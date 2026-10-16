@@ -7,7 +7,8 @@ import {Program} from '../src/regex/program.ts'
 import {compileStageA} from '../src/net/stage-a.ts'
 import {buildLayout} from '../src/net/layout.ts'
 import {buildDriverTables} from '../src/driver/driver-tables.ts'
-import {runLine, endStack, type FrameKey, type RecordRow, type LineResult} from '../src/driver/line-driver.ts'
+import {runLine, endStack, type FrameKey, type RecordRow, type LineResult, type Segment} from '../src/driver/line-driver.ts'
+import {defaultSegments, segmentStarts} from '../src/driver/segments.ts'
 import {buildExperts, cellLayout} from '../src/driver/circuit.ts'
 import {requestDevice} from '../src/gpu/node-device.ts'
 import {createStageA, batchLines} from '../src/gpu/stage-a-kernel.ts'
@@ -47,6 +48,7 @@ const lengths = lines.map(line => [...line].length + 1)
 const rootKey: FrameKey = {rule: t.rootRule, endVariant: 0, capturedEOL: 0, nameTheme: t.rootTheme, contentTheme: t.rootTheme}
 // The exact starts, with the JS line driver.
 const starts: FrameKey[][] = []
+const expectedStarts = starts
 const expected: LineResult[] = []
 let stack = [rootKey]
 for (let i = 0; i < lines.length; i++) {
@@ -65,4 +67,33 @@ results.forEach((r, i) => {
   if (!same && differing++ < 3) console.log(`line ${i}: status ${r.status}, tokens ${JSON.stringify(r.tokens).slice(0, 200)} vs ${JSON.stringify(e.tokens).slice(0, 200)}; top ${r.top}/${e.top} depth ${r.readDepth}/${e.readDepth} pushed ${r.pushed.length}/${e.pushed.length} rest ${r.rest}/${e.rest}`)
 })
 console.log(`${file}: ${lines.length} lines on the GPU in ${ms.toFixed(0)} ms, max steps ${Math.max(...results.map(r => r.steps))}, ${differing} differ from the JS line driver`)
+
+// The lite version's segments (segments.ts) of the lines longer than two segments, each from the end stack of the
+// segment before it in the JS line driver, with tokens and without.
+const segmentJobs: {line: number, firstLine: boolean, start: FrameKey[], segment: Segment}[] = []
+const segmentExpected: LineResult[][] = [[], []]
+lines.forEach((line, i) => {
+  const starts = segmentStarts(Array.from(line, ch => ch.codePointAt(0)!), defaultSegments)
+  if (starts.length < 3) return
+  let stack = expectedStarts[i]!
+  starts.forEach((start, j) => {
+    const segment = {start, end: j + 1 < starts.length ? starts[j + 1]! : lengths[i]! + 1}
+    segmentJobs.push({line: i, firstLine: i === 0, start: stack, segment})
+    const r = runLine(t, lengths[i]!, i === 0, stack, rowAt(i), true, segment)
+    segmentExpected[1]!.push(r)
+    segmentExpected[0]!.push(runLine(t, lengths[i]!, i === 0, stack, rowAt(i), false, segment))
+    stack = endStack(stack, r)
+  })
+})
+for (const tokens of [false, true]) {
+  const out = await driver.run(gpu, lengths, segmentJobs, {tokens})
+  let segmentDiffering = 0
+  out.forEach((r, k) => {
+    const e = segmentExpected[tokens ? 1 : 0]![k]!
+    // A run without tokens stores none on the GPU, but the JS line driver still writes the token of an empty line.
+    const same = r.status === 0 && (!tokens || isDeepStrictEqual(r.tokens, e.tokens) && r.lastEnd === e.lastEnd) && r.top === e.top && r.readDepth === e.readDepth && isDeepStrictEqual(r.pushed, e.pushed) && r.rest === e.rest
+    if (!same && segmentDiffering++ < 3) console.log(`segment ${k} (line ${segmentJobs[k]!.line}, ${JSON.stringify(segmentJobs[k]!.segment)}): status ${r.status}, lastEnd ${r.lastEnd}/${e.lastEnd}, tokens ${JSON.stringify(r.tokens).slice(0, 120)} vs ${JSON.stringify(e.tokens).slice(0, 120)}`)
+  })
+  console.log(`${segmentJobs.length} segments of ${new Set(segmentJobs.map(job => job.line)).size} long lines, ${tokens ? 'with' : 'without'} tokens: ${segmentDiffering} differ from the JS line driver`)
+}
 process.exit(0)
