@@ -37,14 +37,11 @@ Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the
 | lodash, minified | 36,609 | 100% | 2.7 s | 0.15 s |
 | react-dom development, minified | 46,671 | 99.963% | 3.8 s | 0.93 s |
 | oniguruma-parser.min.js | 18,630 | 100% | 1.2 s | 0.19 s |
-| oniguruma-to-es.min.js | 19,453 | 100% | stops (status 3) | 0.21 s |
+| oniguruma-to-es.min.js | 19,453 | 100% | 1.2 s | 0.21 s |
 
 The first four rows are the best of 8 calls, and the others the best of 3, with the versions in alternation. react, lib.es5.d.ts and minified react are also 100% in the lite version. The 103 wrong characters of minified react-dom come from a chunk: a long template literal, whose lookahead needs more than 128 code points past the chunk. Tests with a regex literal and with an arrow function's parameter list of 220 code points across a chunk boundary also give wrong tokens. A larger overlap only moves this limit (docs/ideas.md, idea 25).
 
-On lines of tens of thousands of code points, the full version can also fail:
-
-- The full version's driver runs a line as one job in one command buffer. On the minified fixtures, macOS sometimes stops it, and the GPU device is lost. In the lite version, segments keep each job short.
-- On oniguruma-to-es.min.js, a run from a speculative start leaves more than 32 frames (status 3, see Limits).
+On lines of tens of thousands of code points, the full version can also fail: its driver runs a line as one job in one command buffer, and on the minified fixtures macOS sometimes stops it, so the GPU device is lost. In the lite version, segments keep each job short.
 
 The lite version can also stop the host's rounds early, with `{lite: {maxRounds: k}}`. Each line that is not valid then runs from its predicted start. This is not in the default, because it is a bad trade: with 8 rounds, 4% of the characters of three.min.js are wrong, and the full version needs only 14 rounds. [docs/lessons.md](docs/lessons.md) (section 10) gives the measurements.
 
