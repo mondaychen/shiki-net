@@ -188,4 +188,17 @@ The lite version (README, "The lite version") gives up exactness. `pnpm check:li
   | 32 | 100% | 99.62% | 100% | 100% |
 
   The errors are not in a few lines. In lodash, whole lines of jsdoc examples lost their comment color, because the predicted start had no comment frame. In three.min.js, about 10 characters of many lines were wrong: `function` had the color of a function name, because a frame below the top was wrong. The time gain was small, because the late rounds are short. Only three.min.js gained, about 100 ms to 150 ms, and that was near the noise. react-dom needs 51 rounds, but its output is already identical after 8: its late rounds only make the frames below the top correct.
+- **Segments of long lines in the driver worked, when the boundaries move.** A segment's run starts its search at the segment's start and stops when its search gets to the segment's end, and the host stitches segments as lines. The best of 8 calls:
+
+  | Segment size | three.min.js driver | Rounds | scanner.ts driver |
+  | --- | --- | --- | --- |
+  | none | 317 ms | 64 | 212 ms |
+  | 1,024 | 293 ms | 62 | 48 ms |
+  | 512 | 307 ms | 70 | 34 ms |
+  | 256 | 289 ms | 107 | 29 ms |
+  | 128 | 198 ms | 107 | 27 ms |
+  | 64 | 182 ms | 134 | |
+
+  Most lines of three.min.js have about 500 to 600 code points, so only segments shorter than that help it. A round with one short job took from 0.5 ms to 3.8 ms, and an empty round trip to the GPU takes 0.2 ms. Where the rest of a late round's time goes is not measured yet. With boundaries at fixed places, segments of 128 gave 608 wrong characters on three.min.js, and segments of 32 gave 5,459. A boundary moved to just after `;`, `,`, `{` or `}`, in the 32 code points before it, gave none.
+- **The stop costs the full version nothing measurable.** The search expert checks `q >= segEnd`, and the full version sets segEnd to n + 1. This adds 5 operations to the search expert (139 to 144 with tokens). The driver on three.min.js took 326 ms to 333 ms, against 328 ms to 344 ms before (three runs each, in alternation). The search expert does not make the content token up to the segment's end, because that adds 22 operations. The host makes it, from the content scope of the end stack's top frame.
 - **Order changes the times.** When the lite version always ran second, it was up to 25% slower on files where it does the same work as the full version. `check:lite` now changes the order in each repeat.

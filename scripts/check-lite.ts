@@ -1,6 +1,7 @@
 // The lite version against shiki's codeToTokens: how many characters have shiki's color and font style, how many
 // lines are identical, and the time of the full and the lite version (best of three each, in alternation).
-// Usage: node scripts/check-lite.ts [--rounds k] [--chunks size,left,right | --no-chunks] [--lang name] [file...]
+// Usage: node scripts/check-lite.ts [--rounds k] [--chunks size,left,right | --no-chunks] [--segments size,snap | --no-segments]
+//   [--repeat k] [--lang name] [file...]
 import fs from 'node:fs'
 import {isDeepStrictEqual} from 'node:util'
 import type {ThemedToken} from '@shikijs/types'
@@ -17,13 +18,16 @@ if (rounds) lite.maxRounds = rounds === 'all' ? Infinity : Number(rounds)
 const chunks = option('--chunks')
 if (chunks) { const [size, left, right] = chunks.split(',').map(Number); lite.chunks = {size: size!, left: left!, right: right!} }
 if (args.includes('--no-chunks')) { lite.chunks = null; args.splice(args.indexOf('--no-chunks'), 1) }
+const segments = option('--segments')
+if (segments) { const [size, snap] = segments.split(',').map(Number); lite.segments = {size: size!, snap: snap!} }
+if (args.includes('--no-segments')) { lite.segments = null; args.splice(args.indexOf('--no-segments'), 1) }
 const repeats = Number(option('--repeat') ?? 3)
 
 // Per UTF-16 code unit of a line, its color and font style.
 const styles = (line: ThemedToken[]) => line.flatMap(token => Array.from({length: token.content.length}, () => `${token.color}/${token.fontStyle}`))
 
 const highlighter = await createGpuHighlighter(await requestDevice(), lang)
-console.log(`lite: ${lite.maxRounds} rounds, chunks ${lite.chunks ? `${lite.chunks.size} + ${lite.chunks.left} before + ${lite.chunks.right} after` : 'none'}`)
+console.log(`lite: ${lite.maxRounds} rounds, chunks ${lite.chunks ? `${lite.chunks.size} + ${lite.chunks.left} before + ${lite.chunks.right} after` : 'none'}, segments ${lite.segments ? `${lite.segments.size}, snap ${lite.segments.snap}` : 'none'}`)
 const files = args.length ? args : ['fixtures/lodash.js', 'fixtures/three.min.js', 'fixtures/react.development.js', 'fixtures/react-dom.development.js']
 for (const file of files) {
   const code = fs.readFileSync(file, 'utf8')

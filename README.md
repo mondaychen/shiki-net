@@ -21,17 +21,26 @@ Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the
 
 ## The lite version
 
-`codeToTokens(code, {lite: true})` gives up exactness for time. Stage A runs each long line as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel, so a long line no longer sets the time of stage A. A bit near a kept position is wrong only when its match needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
+`codeToTokens(code, {lite: true})` gives up exactness for time. It makes two changes for long lines, so that a long line no longer sets the time of a stage:
+
+- **Chunks in stage A.** Stage A runs each long line as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel. A bit near a kept position is wrong only when its match needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
+- **Segments in the driver.** The driver runs each line longer than 192 code points as segments of about 128 code points (`src/driver/segments.ts`). The host stitches the segments as it stitches lines: a segment starts from the end stack of the segment before it, and is valid when that stack agrees with its prediction. A segment's run starts its search at the segment's start, and stops when its search gets to the segment's end. A match that starts before the end stays in its segment, and the next segment's tokens before the match's end are dropped. A segment does not start in the state of a run of the whole line: the anchor of `\G` and the frames' positions are lost. So a boundary goes just after `;`, `,`, `{` or `}` when one is in the 32 code points before it, because a match seldom continues past these characters.
 
 `pnpm check:lite` compares the lite version with shiki, character by character, and gives the times of the two versions:
 
-| File | Longest line | Characters as shiki | Full | Lite |
-| --- | --- | --- | --- | --- |
-| lodash@4.17.21 | 180 | 100% | 0.26 s | 0.27 s |
-| three@0.97.0 min | 7,113 | 100% | 0.82 s to 0.97 s | 0.63 s to 0.66 s |
-| scanner.ts (TypeScript) | 10,367 | 100% | 0.65 s | 0.35 s |
+| File | Longest line | Characters as shiki | Full | Chunks only | Lite |
+| --- | --- | --- | --- | --- | --- |
+| lodash@4.17.21 | 180 | 100% | 0.27 s | 0.27 s | 0.27 s |
+| three@0.97.0 min | 7,113 | 100% | 0.86 s | 0.63 s | 0.51 s |
+| react-dom@18.3.1 development | 1,352 | 100% | 0.68 s | | 0.64 s |
+| scanner.ts (TypeScript) | 10,367 | 100% | 0.67 s | 0.32 s | 0.14 s |
 
-On these fixtures, the lite version is identical to shiki. Overlaps of 8 and 16 positions gave 67 wrong characters on three.min.js, so the default overlaps have a margin of 8 times. A line shorter than about 700 code points runs as one unit in the two versions. So lodash and react.development.js do the same work in the two versions, and react-dom.development.js has only one line that changes. In Chrome, three.min.js went from 0.94 s to 0.71 s (best of five runs each).
+The times are the best of 8 calls, with the versions in alternation. On all six fixtures, the lite version is identical to shiki. The margins were measured:
+
+- Overlaps of 8 and 16 positions gave 67 wrong characters on three.min.js, so the default overlaps have a margin of 8 times.
+- Segment boundaries without the move to `;`, `,`, `{` or `}` gave 608 wrong characters on three.min.js (99.89% correct).
+
+Lines shorter than 192 code points do not change, so lodash does the same work in the two versions. The segments make three.min.js need 107 rounds, not 64, but a round waits for a segment of about 128 code points, not for a line of thousands.
 
 The lite version can also stop the host's rounds early, with `{lite: {maxRounds: k}}`. Each line that is not valid then runs from its predicted start. This is not in the default, because it was a bad trade: with 16 rounds, 1.3% of the characters of three.min.js were wrong, and the gain was smaller than the noise. [docs/lessons.md](docs/lessons.md) (section 10) gives the measurements.
 
@@ -152,7 +161,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 | `pnpm check:stage-a-gpu` | stage A on the GPU with stage A on the CPU, every record bit (a sample of lines) | 0 differences |
 | `pnpm check:stage-a-circuit` | stage A's step circuits, run by handwired's evaluator, with stage A on the CPU, every bit at every position (a sample of lines) | 0 differences |
 | `pnpm check:circuit` | the expert circuits, run by handwired's evaluator, with the JS line driver, every register and write at every step | 0 mismatches |
-| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start | 0 differences |
+| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start; and, for the lite version, the segments of each long line | 0 differences |
 | `pnpm check:lines` | the host's stitch with the JS line driver, against `codeToTokens` | identical |
 | `pnpm test` | the full network on the GPU, against `codeToTokens` | identical |
 | `pnpm check:lite` | the lite version against `codeToTokens`, character by character, and the times of the two versions (all four fixtures) | 100% of characters |
