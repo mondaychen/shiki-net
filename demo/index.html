@@ -16,7 +16,7 @@
         GitHub
       </a>
     </div>
-    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output. The full version is identical to shiki. The lite version is faster on long lines, and its tokens can differ from shiki's in rare cases.</p>
+    <p>shiki's JavaScript, TypeScript, JSX and TSX tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output. The full version is identical to shiki. The lite version is faster on long lines, and its tokens can differ from shiki's in rare cases.</p>
   </header>
   <section class="picker">
     <nav class="files" aria-label="Input files">
@@ -29,6 +29,12 @@
       <button data-load="sampleTs">sample.ts</button>
       <button data-load="scanner">scanner.ts</button>
       <button data-load="es5">lib.es5.d.ts</button>
+      <p class="group">JSX</p>
+      <button data-load="sampleJsx">sample.jsx</button>
+      <button data-load="autocomplete">Autocomplete.jsx</button>
+      <p class="group">TSX</p>
+      <button data-load="sampleTsx">sample.tsx</button>
+      <button data-load="excalidraw">App.tsx</button>
     </nav>
     <div class="editor">
       <div class="editor-head">
@@ -38,6 +44,8 @@
           <select id="lang">
             <option value="javascript">JavaScript</option>
             <option value="typescript">TypeScript</option>
+            <option value="jsx">JSX</option>
+            <option value="tsx">TSX</option>
           </select>
         </label>
         <label title="Full: identical to shiki. Lite: runs long lines as chunks in stage A and as segments in the driver, which is faster on long lines; a lookahead that needs text far past a chunk boundary can give wrong tokens.">Version

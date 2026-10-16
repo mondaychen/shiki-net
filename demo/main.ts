@@ -17,7 +17,7 @@ const step = $<HTMLSpanElement>('#step')
 const lang = $<HTMLSelectElement>('#lang')
 const version = $<HTMLSelectElement>('#version')
 const versionNote = $<HTMLSpanElement>('#version-note')
-const languageNames: Record<string, string> = {javascript: 'JavaScript', typescript: 'TypeScript'}
+const languageNames: Record<string, string> = {javascript: 'JavaScript', typescript: 'TypeScript', jsx: 'JSX', tsx: 'TSX'}
 
 const sample = `/**
  * Returns the sum of \`a\` and \`b\`.
@@ -59,6 +59,50 @@ export class Store<T extends object = {}> implements Iterable<Entry<T>> {
 
 declare function assertKind<T>(value: unknown, kind: 'string'): asserts value is T
 const store = new Store<{n: number}>().set('a', {n: 1}) as Mutable<Store<{n: number}>>
+`
+
+const sampleJsx = `import {useState} from 'react'
+
+// A list with a counter: attributes, spread props, fragments, entities and comments in JSX.
+export default function App({items, title = "Hello", ...props}) {
+  const [count, setCount] = useState(0)
+  const ok = count < 10 && items.length > 0
+  return (
+    <div className="app" data-count={count} {...props}>
+      <h1>{title} &amp; friends</h1>
+      {/* the button counts clicks */}
+      <Foo.Button kind='primary' onClick={() => setCount(c => c + 1)} />
+      <>
+        {items.map((item, i) => <li key={i}>{item.name}</li>)}
+      </>
+      {ok ? <span>yes</span> : <b>no</b>}
+      <p>
+        Text with {\`a template \${count}\`} and a / slash
+      </p>
+    </div>
+  )
+}
+const re = /<div>/g, less = count < max, more = count > max
+`
+
+const sampleTsx = `import * as React from 'react'
+
+// A generic list component: type parameters, casts and generic elements in TSX.
+interface Props<T> { items: T[]; render: (item: T) => React.ReactNode; title?: string }
+
+export function List<T,>({items, render, title}: Props<T>): JSX.Element {
+  const ref = React.useRef<HTMLDivElement>(null)
+  const names = items as unknown as string[]
+  const identity = <U extends object>(value: U) => value
+  type Key = keyof Props<number> | \`on\${string}\`
+  return (
+    <div ref={ref} className={title ? "titled" : undefined}>
+      {items.map((item, i) => <Row<T> key={i} value={item!}>{render(item)}</Row>)}
+      <input type="text" disabled />
+    </div>
+  )
+}
+const less = (a: number, b: number) => a < b
 `
 
 // One column of results: its times. A time that is not ready yet shimmers.
@@ -175,6 +219,10 @@ const files: Record<string, {name: string, lang: BundledLanguage, text: () => Pr
   sampleTs: {name: 'sample.ts', lang: 'typescript', text: async () => sampleTs},
   scanner: {name: 'scanner.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/scanner.ts?raw')).default},
   es5: {name: 'lib.es5.d.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/lib.es5.d.ts?raw')).default},
+  sampleJsx: {name: 'sample.jsx', lang: 'jsx', text: async () => sampleJsx},
+  autocomplete: {name: 'Autocomplete.jsx', lang: 'jsx', text: async () => (await import('../fixtures/jsx/Autocomplete.jsx?raw')).default},
+  sampleTsx: {name: 'sample.tsx', lang: 'tsx', text: async () => sampleTsx},
+  excalidraw: {name: 'App.tsx', lang: 'tsx', text: async () => (await import('../fixtures/tsx/App.tsx?raw')).default},
 }
 const lineCount = () => `${code.value.split('\n').length.toLocaleString()} lines`
 let loading = 0

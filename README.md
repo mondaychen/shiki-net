@@ -19,6 +19,13 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls, after one call to warm up. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 50%, mostly in stage A.
 
+The compiler makes a network from shiki's other grammars in the same way. With `lang: 'jsx'` and `lang: 'tsx'`, the network is identical to shiki on these files (`node scripts/check-gpu.ts --lang tsx fixtures/tsx/App.tsx`). The network times are the best of 8 calls:
+
+| File | Language | Lines | Tokens | Result | Network (GPU) | shiki (CPU) |
+| --- | --- | --- | --- | --- | --- | --- |
+| [`Autocomplete.js` of @mui/material@5.16.7](https://github.com/mui/material-ui/blob/v5.16.7/packages/mui-material/src/Autocomplete/Autocomplete.js) | `jsx` | 1,205 | 4,067 | identical | 0.03 s | 0.03 s |
+| [`App.tsx` of excalidraw@0.18.0](https://github.com/excalidraw/excalidraw/blob/v0.18.0/packages/excalidraw/components/App.tsx) | `tsx` | 11,181 | 40,033 | identical | 0.24 s | 0.46 s |
+
 ## The lite version
 
 `codeToTokens(code, {lite: true})` gives up exactness for time on long lines. It makes two changes, so that a long line no longer sets the time of a stage:
@@ -39,7 +46,7 @@ Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the
 | oniguruma-parser.min.js | 18,630 | 100% | 1.2 s | 0.19 s |
 | oniguruma-to-es.min.js | 19,453 | 100% | 1.2 s | 0.21 s |
 
-The first four rows are the best of 8 calls, and the others the best of 3, with the versions in alternation. react, lib.es5.d.ts and minified react are also 100% in the lite version. The 103 wrong characters of minified react-dom come from a chunk: a long template literal, whose lookahead needs more than 128 code points past the chunk. Tests with a regex literal and with an arrow function's parameter list of 220 code points across a chunk boundary also give wrong tokens. A larger overlap only moves this limit (docs/ideas.md, idea 25).
+The first four rows are the best of 8 calls, and the others the best of 3, with the versions in alternation. react, lib.es5.d.ts, minified react, Autocomplete.jsx and App.tsx are also 100% in the lite version. The 103 wrong characters of minified react-dom come from a chunk: a long template literal, whose lookahead needs more than 128 code points past the chunk. Tests with a regex literal and with an arrow function's parameter list of 220 code points across a chunk boundary also give wrong tokens. A larger overlap only moves this limit (docs/ideas.md, idea 25).
 
 On lines of tens of thousands of code points, the full version can also fail: its driver runs a line as one job in one command buffer, and on the minified fixtures macOS sometimes stops it, so the GPU device is lost. In the lite version, segments keep each job short.
 
@@ -64,7 +71,7 @@ pnpm demo:build    # writes the page to dist/, for a static host; the page is di
 
 At each push to `main`, `.github/workflows/pages.yml` builds the page and puts it on GitHub Pages.
 
-Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The Version menu selects the full version or the lite version. For the lite version, the page also gives the percentage of characters that have shiki's color. The file list has a JavaScript sample, two JavaScript fixtures and the minified react-dom (lines of up to 46,671 code points), and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The page compares with shiki without its time limit of 500 ms per line, because shiki stops the long lines of minified code early. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
+Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the network of each other language the first time you highlight that language. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The Version menu selects the full version or the lite version. For the lite version, the page also gives the percentage of characters that have shiki's color. The file list has a JavaScript sample, two JavaScript fixtures and the minified react-dom (lines of up to 46,671 code points), a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`, and a sample and a fixture for each of JSX and TSX. The page compares with shiki without its time limit of 500 ms per line, because shiki stops the long lines of minified code early. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
 
 Each stage also has its own check. The table in [How the result is verified](#how-the-result-is-verified) gives the commands.
 
@@ -206,5 +213,5 @@ Stage A takes about two thirds of the time: about 0.18 s for lodash and 0.50 s f
 | `docs/lessons.md` | What the project taught us: semantics to copy, design decisions with their measurements, bugs, and WebGPU problems |
 | `src/decode.ts` | The network's output as shiki's tokens |
 | `scripts/` | The checks and the timers |
-| `fixtures/` | The test files: lodash, three.min.js, and React's two development builds; two TypeScript files (`typescript/`); and minified code for the lite version (`minified/`, see its README) |
+| `fixtures/` | The test files: lodash, three.min.js, and React's two development builds; two TypeScript files (`typescript/`); a JSX file (`jsx/`, MUI's `Autocomplete.js` with the extension `.jsx`) and a TSX file (`tsx/`), each with its MIT license; and minified code for the lite version (`minified/`, see its README) |
 | `generated/named-sets.json` | The members of Oniguruma's named sets |
