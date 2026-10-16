@@ -5,7 +5,7 @@
 //
 // Source cells map to WGSL: registers to variables, a frame window's fields to variables filled before the step, and an
 // index read over a run of cells to a buffer read: stage A's record bits at the current row, or a table entry.
-import {flattenProgram, createRowWriter, positionsOfWires, type IndexRow} from '../../../handwired/src/json-search/emit.ts'
+import {flattenProgram, createRowWriter, positionsOfWires, type IndexRow} from '../../vendor/handwired/src/json-search/emit.ts'
 import type {Expert, CellLayout} from '../driver/circuit.ts'
 import {scalarRegisters, frameFields} from '../driver/circuit.ts'
 import {slotCount, localDepth} from '../driver/driver-tables.ts'

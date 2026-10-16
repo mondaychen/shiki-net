@@ -17,7 +17,8 @@
     "extract-named-sets": "node scripts/extract-named-sets.ts",
     "demo": "vite",
     "demo:build": "vite build",
-    "check:demo": "node scripts/check-demo.ts"
+    "check:demo": "node scripts/check-demo.ts",
+    "vendor:handwired": "scripts/vendor-handwired.sh"
   },
   "author": "",
   "license": "MIT",

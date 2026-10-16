@@ -8,7 +8,7 @@
 // cells. Every value is an integer below 2^24, so the float32 operations are exact: comparisons are ReLU ramps on the
 // integer difference, AND and OR are ReLUs of sums of bits, a select is off + (on - off) × bit as one ReGLU product,
 // and a table lookup is an index read.
-import {Circuit, type Wire} from '../../../handwired/src/runtime/numeric-ui-core.ts'
+import {Circuit, type Wire} from '../../vendor/handwired/src/runtime/numeric-ui-core.ts'
 import {noName} from '../compile/tables.ts'
 import {itemKind, localDepth, slotCount, walkChunk, type DriverTables} from './driver-tables.ts'
 import {noParent, invalidDepth, mode, kindBegin, kindEnd, kindMatch} from './line-driver.ts'
