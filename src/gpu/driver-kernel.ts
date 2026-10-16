@@ -9,7 +9,7 @@ import {flattenProgram, createRowWriter, positionsOfWires, type IndexRow} from '
 import type {Expert, CellLayout} from '../driver/circuit.ts'
 import {scalarRegisters, frameFields} from '../driver/circuit.ts'
 import {slotCount, localDepth} from '../driver/driver-tables.ts'
-import {mode} from '../driver/line-driver.ts'
+import {mode, type SearchState, type Segment} from '../driver/line-driver.ts'
 import {noParent} from '../driver/line-driver.ts'
 import type {Layout} from '../net/layout.ts'
 import {compilePipeline, storageBuffer, readBuffer} from './device.ts'
@@ -28,8 +28,12 @@ export function packDriverTables(cells: CellLayout, stageLayout: Layout): Driver
   return {words, offsets}
 }
 
-export const jobWords = 9 // line, firstLine, start depth, first start frame, token base, tape base, tape capacity, segment start, segment end
-export const headerWords = 9 // tokCount, top, readDepth, tapeLen, steps, status (0 done, 1 step limit, 2 tape full, 3 end chain too long), end frames, rest, lastEnd
+// line, firstLine, start depth, first start frame, token base, tape base, tape capacity, then the segment's end, and the
+// search state it starts from (linePos, q, anchor + 1), or q = 0 for the start of a line
+export const jobWords = 11
+// tokCount, top, readDepth, tapeLen, steps, status (0 done, 1 step limit, 2 tape full, 3 end chain too long), end frames,
+// rest, lastEnd, and the search state at the end (linePos, q, anchor)
+export const headerWords = 12
 export const endFrames = 64 // the frames a line leaves on top of its start, at most
 // The headers of all jobs come first, then end frame k of all jobs. The host reads the first `readFrames` frames with the
 // headers, and the rest only when a run left more.
@@ -139,7 +143,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let tokenBase = jobs[job * ${jobWords}u + 4u];
   let tapeBase = jobs[job * ${jobWords}u + 5u];
   let tapeCapacity = jobs[job * ${jobWords}u + 6u];
-  let segStart = f32(jobs[job * ${jobWords}u + 7u]);
+  let fromQ = f32(jobs[job * ${jobWords}u + 9u]);
   var full = false;
   let textStart = lines[line * 3u];
   let n = lines[line * 3u + 1u];
@@ -156,13 +160,17 @@ ${scalarRegisters.map(name => `  var r_${name}: f32 = 0.0f;`).join('\n')}
   r_top = -1.0f;
   r_readDepth = 1.0f;
   r_lastMeta = -1.0f;
-  r_anchor = select(-1.0f, 0.0f, starts[startBase + 2u] != 0 && segStart == 0.0f);
-  r_firstLine = select(0.0f, r_firstLine, segStart == 0.0f);
-  r_linePos = segStart;
-  r_q = segStart;
-  r_lastEnd = segStart;
-  r_lastTokStart = segStart;
-  r_segEnd = f32(jobs[job * ${jobWords}u + 8u]);
+  r_anchor = select(-1.0f, 0.0f, starts[startBase + 2u] != 0);
+  // A segment after the first starts from the search state where the segment before it stopped (lineStart).
+  r_segEnd = f32(jobs[job * ${jobWords}u + 7u]);
+  if (fromQ != 0.0f) {
+    r_linePos = f32(jobs[job * ${jobWords}u + 8u]);
+    r_anchor = f32(jobs[job * ${jobWords}u + 10u]) - 1.0f;
+    r_firstLine = select(0.0f, r_firstLine, r_linePos == 0.0f);
+  }
+  r_q = fromQ;
+  r_lastEnd = fromQ;
+  r_lastTokStart = fromQ;
 ${frameFields.map(f => `  var tf_${f}: f32;\n  var af_${f}: f32;\n  var w_${f}: f32;`).join('\n')}
   var tokenEnable: f32; var tokenIndex: f32; var tokenStart: f32; var tokenMeta: f32; var frameEnable: f32;
   var clsQ: f32;
@@ -253,14 +261,17 @@ ${frameFields.map((field, i) => `      tape[at + ${i}u] = i32(w_${field});`).joi
   headers[h + 6u] = i32(endCount);
   headers[h + 7u] = select(-1, i32(-endRef) - 1, endRef < 0.0f && endRef != NOPARENT);
   headers[h + 8u] = i32(r_lastEnd);
+  headers[h + 9u] = i32(r_linePos);
+  headers[h + 10u] = i32(r_q);
+  headers[h + 11u] = i32(r_anchor);
 }
 `
 }
 
 // A job runs a whole line, or, in the lite version, a segment of it (see lineStart).
-export type DriverJob = {line: number, firstLine: boolean, start: FrameKeyLike[], segment?: {start: number, end: number}}
+export type DriverJob = {line: number, firstLine: boolean, start: FrameKeyLike[], segment?: Segment}
 type FrameKeyLike = {rule: number, endVariant: number, capturedEOL: number, nameTheme: number, contentTheme: number}
-export type DriverResult = {tokens: {start: number, meta: number}[], pushed: FrameKeyLike[], rest: number, top: number, readDepth: number, steps: number, status: number, lastEnd: number}
+export type DriverResult = {tokens: {start: number, meta: number}[], pushed: FrameKeyLike[], rest: number, top: number, readDepth: number, steps: number, status: number, lastEnd: number, end: SearchState}
 
 // `experts` make tokens; `plainExperts` (buildExperts with tokens false) run the jobs that make none.
 export async function createDriver(device: GPUDevice, experts: Expert[], plainExperts: Expert[], cells: CellLayout, stageLayout: Layout) {
@@ -294,7 +305,8 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
       part.forEach((job, i) => {
         const n = lengths[job.line]!
         const capacity = n + 16
-        const segStart = job.segment?.start ?? 0
+        const from = job.segment?.from
+        const segStart = from?.q ?? 0
         const at = i * jobWords
         jobWordsArray[at] = job.line
         jobWordsArray[at + 1] = job.firstLine ? 1 : 0
@@ -303,8 +315,10 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
         jobWordsArray[at + 4] = tokenBase
         jobWordsArray[at + 5] = tapeBase
         jobWordsArray[at + 6] = capacity
-        jobWordsArray[at + 7] = segStart
-        jobWordsArray[at + 8] = job.segment?.end ?? n + 1
+        jobWordsArray[at + 7] = job.segment?.end ?? n + 1
+        jobWordsArray[at + 8] = from?.linePos ?? 0
+        jobWordsArray[at + 9] = segStart
+        jobWordsArray[at + 10] = (from?.anchor ?? 0) + 1
         for (const key of job.start) {
           starts[startAt] = key.rule
           starts[startAt + 1] = key.endVariant
@@ -357,7 +371,8 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
         for (let k = 0; k < headers[h + 6]!; k++) {
           pushed.push({rule: frameWord(k, i, 0), endVariant: frameWord(k, i, 1), capturedEOL: frameWord(k, i, 2), nameTheme: frameWord(k, i, 3), contentTheme: frameWord(k, i, 4)})
         }
-        results.push({tokens: lineTokens, pushed, rest: headers[h + 7]!, top: headers[h + 1]!, readDepth: headers[h + 2]!, steps: headers[h + 4]!, status: headers[h + 5]!, lastEnd: headers[h + 8]!})
+        results.push({tokens: lineTokens, pushed, rest: headers[h + 7]!, top: headers[h + 1]!, readDepth: headers[h + 2]!, steps: headers[h + 4]!, status: headers[h + 5]!, lastEnd: headers[h + 8]!,
+          end: {linePos: headers[h + 9]!, q: headers[h + 10]!, anchor: headers[h + 11]!}})
       })
     }
     return results

@@ -12,7 +12,7 @@ import {compileStageA} from './net/stage-a.ts'
 import {buildLayout} from './net/layout.ts'
 import {buildDriverTables} from './driver/driver-tables.ts'
 import {buildExperts, cellLayout} from './driver/circuit.ts'
-import {stitchLines, type FrameKey, type LineResult} from './driver/line-driver.ts'
+import {lineStartState, stateKey, stateOfKey, stitchLines, type FrameKey, type LineResult, type Segment} from './driver/line-driver.ts'
 import {defaultSegments, joinSegments, segmentStarts, type SegmentOptions} from './driver/segments.ts'
 import {createStageA, batchLines, defaultChunks, type ChunkOptions} from './gpu/stage-a-kernel.ts'
 import {createDriver} from './gpu/driver-kernel.ts'
@@ -82,15 +82,18 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
         virtual.push({line, text, start, end: j + 1 < starts.length ? starts[j + 1]! : lengths[text]! + 1})
       })
     })
-    const jobOf = (v: number, start: FrameKey[]) => {
-      const {line, text, start: at, end} = virtual[v]!
-      return {line: text, firstLine: line === 0 && at === 0, start, segment: {start: at, end}}
+    // A segment's first guess of its start state: the search starts at its first position.
+    const firstStates = virtual.map(v => v.start === 0 ? lineStartState : stateKey({linePos: v.start, q: v.start, anchor: -1}))
+    const jobOf = (v: number, start: FrameKey[], state: number) => {
+      const {line, text, end} = virtual[v]!
+      const segment: Segment = {from: state === lineStartState ? undefined : stateOfKey(state), end}
+      return {line: text, firstLine: line === 0, start, segment}
     }
     let driverMs = 0
     let rerunTotal = 0
-    const runDriver = async (jobs: {line: number, start: FrameKey[]}[], tokens: boolean) => {
+    const runDriver = async (jobs: {line: number, start: FrameKey[], state: number}[], tokens: boolean) => {
       const t1 = performance.now()
-      const out = await driver.run(gpu, lengths, jobs.map(job => jobOf(job.line, job.start)), {tokens})
+      const out = await driver.run(gpu, lengths, jobs.map(job => jobOf(job.line, job.start, job.state)), {tokens})
       // In the lite version, a chunk's record can be wrong, and a walk can then lose its path. Those lines' stage A runs
       // again without chunks, and their jobs run again.
       let rerunMs = 0
@@ -104,7 +107,7 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
           rerunMs = performance.now() - t2
           stageAMs += rerunMs
           rerunTotal += rerunMs
-          const again = await driver.run(gpu, lengths, failed.map(k => jobOf(jobs[k]!.line, jobs[k]!.start)), {tokens})
+          const again = await driver.run(gpu, lengths, failed.map(k => jobOf(jobs[k]!.line, jobs[k]!.start, jobs[k]!.state)), {tokens})
           failed.forEach((k, i) => { out[k] = again[i]! })
         }
       }
@@ -116,10 +119,12 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
     t0 = performance.now()
     // Rounds of runs from predicted starts, without tokens; then each chosen run again, with tokens. Virtual lines with
     // the same text and start share runs, and those with the same choice share the run with tokens.
-    const {prefixes, choices, rounds, runs} = await stitchLines(virtual.length, rootKey, (which, starts) => runDriver(which.map((v, k) => ({line: v, start: starts[k]!})), false), groups, virtual.map(v => Math.min(v.end, lengths[v.text]!) - v.start), undefined, undefined, lite?.maxRounds)
+    const {prefixes, states, choices, rounds, runs} = await stitchLines(virtual.length, rootKey,
+      (which, starts, jobStates) => runDriver(which.map((v, k) => ({line: v, start: starts[k]!, state: jobStates[k]!})), false), groups,
+      virtual.map(v => Math.min(v.end, lengths[v.text]!) - v.start), undefined, undefined, lite?.maxRounds, firstStates)
     const tokenRun = new Map<number, number>()
-    const tokenJobs: {line: number, start: FrameKey[]}[] = []
-    choices.forEach((choice, v) => { if (!tokenRun.has(choice)) { tokenRun.set(choice, tokenJobs.length); tokenJobs.push({line: v, start: prefixes[v]!}) } })
+    const tokenJobs: {line: number, start: FrameKey[], state: number}[] = []
+    choices.forEach((choice, v) => { if (!tokenRun.has(choice)) { tokenRun.set(choice, tokenJobs.length); tokenJobs.push({line: v, start: prefixes[v]!, state: states[v]!}) } })
     const tokenResults = await runDriver(tokenJobs, true)
     const results = choices.map(choice => tokenResults[tokenRun.get(choice)!]!)
     // Each line's tokens: its run's, or its segments' joined.
@@ -128,7 +133,7 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
       let w = v + 1
       while (w < virtual.length && virtual[w]!.line === virtual[v]!.line) w++
       lineTokens[virtual[v]!.line] = w === v + 1 ? results[v]!.tokens
-        : joinSegments(virtual.slice(v, w).map((s, j) => ({start: s.start, end: s.end, result: results[v + j]!, startStack: prefixes[v + j]!})), t.themeMeta)
+        : joinSegments(virtual.slice(v, w).map((_, j) => ({result: results[v + j]!, startStack: prefixes[v + j]!})), t.themeMeta)
       v = w
     }
     const stitch = performance.now() - t0 - driverMs - rerunTotal

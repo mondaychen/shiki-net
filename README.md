@@ -21,28 +21,30 @@ Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the
 
 ## The lite version
 
-`codeToTokens(code, {lite: true})` gives up exactness for time. It makes two changes for long lines, so that a long line no longer sets the time of a stage:
+`codeToTokens(code, {lite: true})` gives up exactness for time on long lines. It makes two changes, so that a long line no longer sets the time of a stage:
 
-- **Chunks in stage A.** Stage A runs each long line as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel. A bit near a kept position is wrong only when its match needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
-- **Segments in the driver.** The driver runs each line longer than 192 code points as segments of about 128 code points (`src/driver/segments.ts`). The host stitches the segments as it stitches lines: a segment starts from the end stack of the segment before it, and is valid when that stack agrees with its prediction. A segment's run starts its search at the segment's start, and stops when its search gets to the segment's end. A match that starts before the end stays in its segment, and the next segment's tokens before the match's end are dropped. A segment does not start in the state of a run of the whole line: the anchor of `\G` and the frames' positions are lost. So a boundary goes just after `;`, `,`, `{` or `}` when one is in the 32 code points before it, because a match seldom continues past these characters.
+- **Chunks in stage A.** Stage A runs each line of more than about 700 code points as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel. A bit near a kept position is wrong when its match or its lookahead needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
+- **Segments in the driver.** The driver runs each line of more than 192 code points as segments of 128 code points, or of a 64th of the line when that is longer (`src/driver/segments.ts`). The host stitches the segments as it stitches lines. A segment's run stops when its search gets to the segment's end, and the next segment starts from the search state where it stopped: `q`, whether `linePos` is `q`, and whether the anchor is `linePos`. The stitch checks that state as it checks the stack, so a match that goes past a boundary is not read again. A boundary goes just after `;`, `,`, `{` or `}` when one is near, because there the first guess of the state is usually right. The only state that a segment loses is the positions of the frames from earlier segments, as a line loses those of earlier lines. `pnpm check:driver-gpu` compares the joined segments of each long line with a run of the whole line: they are equal on all fixtures.
 
-`pnpm check:lite` compares the lite version with shiki, character by character, and gives the times of the two versions:
+`pnpm check:lite` compares the full and the lite version with shiki, character by character, and gives their times. The minified fixtures (`fixtures/minified`) have lines of up to 46,671 code points. shiki stops a line after 500 ms by default (`tokenizeTimeLimit`), so the check compares with shiki without that limit.
 
-| File | Longest line | Characters as shiki | Full | Chunks only | Lite |
-| --- | --- | --- | --- | --- | --- |
-| lodash@4.17.21 | 180 | 100% | 0.29 s | | 0.29 s |
-| three@0.97.0 min | 7,113 | 100% | 0.66 s | 0.41 s | 0.39 s |
-| react@18.3.1 development | 474 | 100% | 0.08 s | | 0.08 s |
-| react-dom@18.3.1 development | 1,352 | 100% | 0.59 s | | 0.53 s |
-| scanner.ts (TypeScript) | 10,367 | 100% | 0.67 s | 0.36 s | 0.15 s |
-| lib.es5.d.ts (TypeScript) | 422 | 100% | 0.08 s | | 0.08 s |
+| File | Longest line | Lite: characters as shiki | Full | Lite |
+| --- | --- | --- | --- | --- |
+| lodash@4.17.21 | 180 | 100% | 0.33 s | 0.32 s |
+| three@0.97.0 min | 7,113 | 100% | 0.69 s | 0.45 s |
+| react-dom@18.3.1 development | 1,352 | 100% | 0.65 s | 0.59 s |
+| scanner.ts (TypeScript) | 10,367 | 100% | 0.71 s | 0.16 s |
+| lodash, minified | 36,609 | 100% | 2.7 s | 0.15 s |
+| react-dom development, minified | 46,671 | 99.963% | 3.8 s | 0.93 s |
+| oniguruma-parser.min.js | 18,630 | 100% | 1.2 s | 0.19 s |
+| oniguruma-to-es.min.js | 19,453 | 100% | stops (status 3) | 0.21 s |
 
-The times are the best of 8 calls, with the versions in alternation. On all six fixtures, the lite version is identical to shiki. The margins were measured:
+The first four rows are the best of 8 calls, and the others the best of 3, with the versions in alternation. react, lib.es5.d.ts and minified react are also 100% in the lite version. The 103 wrong characters of minified react-dom come from a chunk: a long template literal, whose lookahead needs more than 128 code points past the chunk. Tests with a regex literal and with an arrow function's parameter list of 220 code points across a chunk boundary also give wrong tokens. A larger overlap only moves this limit (docs/ideas.md, idea 25).
 
-- Overlaps of 8 and 16 positions gave 67 wrong characters on three.min.js, so the default overlaps have a margin of 8 times.
-- Segment boundaries without the move to `;`, `,`, `{` or `}` gave 608 wrong characters on three.min.js (99.89% correct).
+On lines of tens of thousands of code points, the full version can also fail:
 
-Lines shorter than 192 code points do not change, so lodash does the same work in the two versions. The segments make three.min.js need 24 rounds, not 14, but a round waits for a segment of about 128 code points, not for a line of thousands. Since the stitch predicts a line only as far as its run agrees (docs/ideas.md, idea 17), the full version needs few rounds, so the segments now help three.min.js less (0.41 s to 0.39 s) than they help scanner.ts (0.36 s to 0.15 s), whose longest line is in the token run.
+- The full version's driver runs a line as one job in one command buffer. On the minified fixtures, macOS sometimes stops it, and the GPU device is lost. In the lite version, segments keep each job short.
+- On oniguruma-to-es.min.js, a run from a speculative start leaves more than 32 frames (status 3, see Limits).
 
 The lite version can also stop the host's rounds early, with `{lite: {maxRounds: k}}`. Each line that is not valid then runs from its predicted start. This is not in the default, because it is a bad trade: with 8 rounds, 4% of the characters of three.min.js are wrong, and the full version needs only 14 rounds. [docs/lessons.md](docs/lessons.md) (section 10) gives the measurements.
 
@@ -163,10 +165,10 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 | `pnpm check:stage-a-gpu` | stage A on the GPU with stage A on the CPU, every record bit (a sample of lines) | 0 differences |
 | `pnpm check:stage-a-circuit` | stage A's step circuits, run by handwired's evaluator, with stage A on the CPU, every bit at every position (a sample of lines) | 0 differences |
 | `pnpm check:circuit` | the expert circuits, run by handwired's evaluator, with the JS line driver, every register and write at every step | 0 mismatches |
-| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start; and, for the lite version, the segments of each long line | 0 differences |
+| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start; for the lite version, the segments of each long line, and the joined segments against a run of the whole line | 0 differences |
 | `pnpm check:lines` | the host's stitch with the JS line driver, against `codeToTokens` | identical |
 | `pnpm test` | the full network on the GPU, against `codeToTokens` | identical |
-| `pnpm check:lite` | the lite version against `codeToTokens`, character by character, and the times of the two versions (all four fixtures) | 100% of characters |
+| `pnpm check:lite` | the full and the lite version against `codeToTokens` without its time limit, character by character, and the times of the two versions (the four JavaScript fixtures and the minified ones) | full: identical; lite: 100% except 103 characters of minified react-dom |
 | `pnpm check:demo` | the demo page in a headless Chrome, which compares the network with shiki in the browser; and the lite version, which must not fail | identical |
 
 ## Grammar features and how the network covers them
@@ -207,5 +209,5 @@ Stage A takes about two thirds of the time: about 0.18 s for lodash and 0.50 s f
 | `docs/lessons.md` | What the project taught us: semantics to copy, design decisions with their measurements, bugs, and WebGPU problems |
 | `src/decode.ts` | The network's output as shiki's tokens |
 | `scripts/` | The checks and the timers |
-| `fixtures/` | The four test files: lodash, three.min.js, and React's two development builds |
+| `fixtures/` | The test files: lodash, three.min.js, and React's two development builds; two TypeScript files (`typescript/`); and minified code for the lite version (`minified/`, see its README) |
 | `generated/named-sets.json` | The members of Oniguruma's named sets |

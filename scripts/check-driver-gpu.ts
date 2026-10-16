@@ -7,8 +7,8 @@ import {Program} from '../src/regex/program.ts'
 import {compileStageA} from '../src/net/stage-a.ts'
 import {buildLayout} from '../src/net/layout.ts'
 import {buildDriverTables} from '../src/driver/driver-tables.ts'
-import {runLine, endStack, type FrameKey, type RecordRow, type LineResult, type Segment} from '../src/driver/line-driver.ts'
-import {defaultSegments, segmentStarts} from '../src/driver/segments.ts'
+import {runLine, endStack, stateKey, stateOfKey, type FrameKey, type RecordRow, type LineResult, type SearchState, type Segment} from '../src/driver/line-driver.ts'
+import {defaultSegments, joinSegments, segmentStarts} from '../src/driver/segments.ts'
 import {buildExperts, cellLayout} from '../src/driver/circuit.ts'
 import {requestDevice} from '../src/gpu/node-device.ts'
 import {createStageA, batchLines} from '../src/gpu/stage-a-kernel.ts'
@@ -68,30 +68,40 @@ results.forEach((r, i) => {
 })
 console.log(`${file}: ${lines.length} lines on the GPU in ${ms.toFixed(0)} ms, max steps ${Math.max(...results.map(r => r.steps))}, ${differing} differ from the JS line driver`)
 
-// The lite version's segments (segments.ts) of the lines longer than two segments, each from the end stack of the
-// segment before it in the JS line driver, with tokens and without.
+// The lite version's segments (segments.ts) of the lines longer than two segments: each from the end stack and the end
+// search state of the segment before it in the JS line driver, with tokens and without.
 const segmentJobs: {line: number, firstLine: boolean, start: FrameKey[], segment: Segment}[] = []
 const segmentExpected: LineResult[][] = [[], []]
+const joinedDiffering: number[] = []
 lines.forEach((line, i) => {
   const starts = segmentStarts(Array.from(line, ch => ch.codePointAt(0)!), defaultSegments)
   if (starts.length < 3) return
   let stack = expectedStarts[i]!
-  starts.forEach((start, j) => {
-    const segment = {start, end: j + 1 < starts.length ? starts[j + 1]! : lengths[i]! + 1}
+  let from: SearchState | undefined
+  starts.forEach((_, j) => {
+    const segment: Segment = {from, end: j + 1 < starts.length ? starts[j + 1]! : lengths[i]! + 1}
     segmentJobs.push({line: i, firstLine: i === 0, start: stack, segment})
     const r = runLine(t, lengths[i]!, i === 0, stack, rowAt(i), true, segment)
     segmentExpected[1]!.push(r)
     segmentExpected[0]!.push(runLine(t, lengths[i]!, i === 0, stack, rowAt(i), false, segment))
     stack = endStack(stack, r)
+    // Through the stitch's key, as the highlighter does, so that the joined check below also covers the key.
+    from = stateOfKey(stateKey(r.end))
   })
+  // The segments joined, against the run of the whole line: they differ only where a frame from an earlier segment
+  // needed its positions.
+  const k = segmentExpected[1]!.length - starts.length
+  const parts = segmentExpected[1]!.slice(k).map((result, j) => ({result, startStack: segmentJobs[k + j]!.start}))
+  if (!isDeepStrictEqual(joinSegments(parts, t.themeMeta), expected[i]!.tokens) || !isDeepStrictEqual(stack, endStack(expectedStarts[i]!, expected[i]!))) joinedDiffering.push(i)
 })
+console.log(`${joinedDiffering.length} long lines whose joined segments differ from the whole line's run${joinedDiffering.length ? `: ${joinedDiffering.slice(0, 8).join(', ')}` : ''}`)
 for (const tokens of [false, true]) {
   const out = await driver.run(gpu, lengths, segmentJobs, {tokens})
   let segmentDiffering = 0
   out.forEach((r, k) => {
     const e = segmentExpected[tokens ? 1 : 0]![k]!
     // A run without tokens stores none on the GPU, but the JS line driver still writes the token of an empty line.
-    const same = r.status === 0 && (!tokens || isDeepStrictEqual(r.tokens, e.tokens) && r.lastEnd === e.lastEnd) && r.top === e.top && r.readDepth === e.readDepth && isDeepStrictEqual(r.pushed, e.pushed) && r.rest === e.rest
+    const same = r.status === 0 && (!tokens || isDeepStrictEqual(r.tokens, e.tokens) && r.lastEnd === e.lastEnd) && r.top === e.top && r.readDepth === e.readDepth && isDeepStrictEqual(r.pushed, e.pushed) && r.rest === e.rest && isDeepStrictEqual(r.end, e.end)
     if (!same && segmentDiffering++ < 3) console.log(`segment ${k} (line ${segmentJobs[k]!.line}, ${JSON.stringify(segmentJobs[k]!.segment)}): status ${r.status}, lastEnd ${r.lastEnd}/${e.lastEnd}, tokens ${JSON.stringify(r.tokens).slice(0, 120)} vs ${JSON.stringify(e.tokens).slice(0, 120)}`)
   })
   console.log(`${segmentJobs.length} segments of ${new Set(segmentJobs.map(job => job.line)).size} long lines, ${tokens ? 'with' : 'without'} tokens: ${segmentDiffering} differ from the JS line driver`)

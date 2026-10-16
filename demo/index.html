@@ -39,7 +39,7 @@
             <option value="typescript">TypeScript</option>
           </select>
         </label>
-        <label title="Full: identical to shiki. Lite: runs long lines as chunks in stage A and as segments in the driver, which is faster on long lines; tokens near a chunk or segment boundary can be wrong.">Version
+        <label title="Full: identical to shiki. Lite: runs long lines as chunks in stage A and as segments in the driver, which is faster on long lines; a lookahead that needs text far past a chunk boundary can give wrong tokens.">Version
           <select id="version">
             <option value="full">Full (exact)</option>
             <option value="lite">Lite (faster)</option>
