@@ -2,7 +2,7 @@
 
 shiki-net is shiki's JavaScript tokenizer as a handwired neural network. The network runs on the GPU. Its output is identical to shiki's `codeToTokens`.
 
-Demo: https://mondaychen.github.io/shiki-net/ (a browser with WebGPU, such as a recent Chrome)
+Demo: https://mengdi.dev/shiki-net/ (a browser with WebGPU, such as a recent Chrome)
 
 The network follows [handwired](https://github.com/chenglou/handwired): its operations are weighted sums, ReLU products (ReGLU) and table reads over float32 values. A compiler writes all weights from shiki's grammar and theme. There is no training. All values are bits or integers below 2^24, so each float32 operation is exact.
 
