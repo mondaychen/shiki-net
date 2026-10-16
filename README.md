@@ -153,7 +153,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 ## Limits
 
 - The compiler accepts grammars with the features above. It stops with an error for other features: captures with patterns, `while` rules, injections, names with `$n`, more than one atomic group, or a backreference to a group that does not capture one code point of a small set.
-- A line must be shorter than 65,536 code points. A line may leave at most 32 frames on top of its start. Captures may nest at most 8 deep. The kernel reports a status when a run goes past a limit, and the host stops with an error.
+- A line must be shorter than 65,536 code points. A line may leave at most 64 frames on top of its start. Captures may nest at most 8 deep. The kernel reports a status when a run goes past a limit, and the host stops with an error.
 - macOS stops a GPU command buffer that runs too long. So stage A runs in dispatches of 192 steps, and keeps the state of each line in a buffer between dispatches.
 - The `webgpu` package (0.6.2) crashes when the garbage collector frees the Dawn instance, and in `createComputePipelineAsync`. `src/gpu/device.ts` works around both.
 

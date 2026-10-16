@@ -30,7 +30,10 @@ export function packDriverTables(cells: CellLayout, stageLayout: Layout): Driver
 
 export const jobWords = 7 // line, firstLine, start depth, first start frame, token base, tape base, tape capacity
 export const headerWords = 8 // tokCount, top, readDepth, tapeLen, steps, status (0 done, 1 step limit, 2 tape full, 3 end chain too long), end frames, rest
-export const endFrames = 32 // the frames a line leaves on top of its start, at most
+export const endFrames = 64 // the frames a line leaves on top of its start, at most
+// The headers of all jobs come first, then end frame k of all jobs. The host reads the first `readFrames` frames with the
+// headers, and the rest only when a run left more.
+export const readFrames = 16
 export const resultWords = headerWords + endFrames * 5
 export const startFrameWords = 5
 export const tapeFrameWords = 8
@@ -104,7 +107,6 @@ export function driverWgsl(experts: Expert[], cells: CellLayout, stageLayout: La
   const tableOffset = weights.offsets.classOf!
   return /* wgsl */ `
 const REC: u32 = ${R.words}u;
-const RESULT: u32 = ${resultWords}u; // per job: the header, then the end frames
 const NOPARENT: f32 = ${noParent}.0f;
 
 @group(0) @binding(0) var<storage, read> T: array<i32>;
@@ -230,11 +232,11 @@ ${frameFields.map((field, i) => `      tape[at + ${i}u] = i32(w_${field});`).joi
   loop {
     if (endRef < 0.0f || endCount >= ${endFrames}u) { break; }
     let at = tapeBase + u32(endRef) * ${tapeFrameWords}u;
-    for (var i = 0u; i < 5u; i++) { headers[job * RESULT + ${headerWords}u + endCount * 5u + i] = tape[at + i]; }
+    for (var i = 0u; i < 5u; i++) { headers[params.x * (${headerWords}u + endCount * 5u) + job * 5u + i] = tape[at + i]; }
     endCount++;
     endRef = f32(tape[at + 5u]);
   }
-  let h = job * RESULT;
+  let h = job * ${headerWords}u;
   headers[h] = i32(r_tokCount);
   headers[h + 1u] = i32(r_top);
   headers[h + 2u] = i32(r_readDepth);
@@ -323,10 +325,15 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
       pass.dispatchWorkgroups(Math.ceil(part.length * spread / 64))
       pass.end()
       device.queue.submit([encoder.finish()])
-      const headers = new Int32Array((await readBuffer(device, headerBuffer, 0, part.length * resultWords * 4)).buffer)
+      const firstWords = part.length * (headerWords + readFrames * 5)
+      const headers = new Int32Array((await readBuffer(device, headerBuffer, 0, firstWords * 4)).buffer)
+      let most = 0
+      for (let i = 0; i < part.length; i++) most = Math.max(most, headers[i * headerWords + 6]!)
+      const rest = most > readFrames ? new Int32Array((await readBuffer(device, headerBuffer, firstWords * 4, part.length * (most - readFrames) * 5 * 4)).buffer) : null
+      const frameWord = (k: number, i: number, w: number) => k < readFrames ? headers[part.length * (headerWords + k * 5) + i * 5 + w]! : rest![part.length * (k - readFrames) * 5 + i * 5 + w]!
       const tokens = storeTokens ? await readBuffer(device, tokenBuffer, 0, Math.max(16, tokenBase * 8)) : null
       part.forEach((_, i) => {
-        const h = i * resultWords
+        const h = i * headerWords
         const tokCount = headers[h]!
         const lineTokens: {start: number, meta: number}[] = []
         if (tokens) {
@@ -335,8 +342,7 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
         }
         const pushed: FrameKeyLike[] = []
         for (let k = 0; k < headers[h + 6]!; k++) {
-          const at = h + headerWords + k * 5
-          pushed.push({rule: headers[at]!, endVariant: headers[at + 1]!, capturedEOL: headers[at + 2]!, nameTheme: headers[at + 3]!, contentTheme: headers[at + 4]!})
+          pushed.push({rule: frameWord(k, i, 0), endVariant: frameWord(k, i, 1), capturedEOL: frameWord(k, i, 2), nameTheme: frameWord(k, i, 3), contentTheme: frameWord(k, i, 4)})
         }
         results.push({tokens: lineTokens, pushed, rest: headers[h + 7]!, top: headers[h + 1]!, readDepth: headers[h + 2]!, steps: headers[h + 4]!, status: headers[h + 5]!})
       })
