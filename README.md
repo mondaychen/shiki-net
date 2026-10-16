@@ -87,6 +87,8 @@ ok[c](p) = member(c, class(p)) AND OR over follow items i of c: (guard_i(p + 1) 
 
 The record of a position holds the ok bits that a walk can read, the guard bits and the first pattern of each scanner. It is 200 words per position.
 
+`src/net/stage-a-circuit.ts` builds the two steps of stage A with handwired's `Circuit`: the forward step of the lookbehinds and the backward step. A step reads only the bits of the adjacent position, the class at p and at p - 1, p and n. Its first layer is the one-hot of the class. A set's membership is a sum over the one-hot, with 0/1 weights. The backward step has 47,846 live operations in 12 layers. The forward step has 961 in 7 layers. handwired's tensor evaluator runs the two steps, and `pnpm check:stage-a-circuit` compares each bit with the dense CPU evaluation. The kernel does not run the circuit, because the circuit is dense. The kernel computes the same values from the bits that hold.
+
 ### Stage B: the driver network
 
 The driver is vscode-textmate's tokenizer loop (`_tokenizeString`, `handleCaptures`, `LineTokens`). Its step is a set of handwired `Circuit`s, one per mode (`src/driver/circuit.ts`). The modes are: search, walk, pre, capture, post, guard and two line-end steps.
@@ -128,6 +130,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 | `pnpm check:driver` | the reference driver with the reference matcher, against vscode-textmate's `tokenizeLine2` | all lines identical |
 | `pnpm check:stage-a` | stage A on the CPU, dense, with the reference matcher, every bit (a sample of lines) | 0 differences |
 | `pnpm check:stage-a-gpu` | stage A on the GPU with stage A on the CPU, every record bit (a sample of lines) | 0 differences |
+| `pnpm check:stage-a-circuit` | stage A's step circuits, run by handwired's evaluator, with stage A on the CPU, every bit at every position (a sample of lines) | 0 differences |
 | `pnpm check:circuit` | the expert circuits, run by handwired's evaluator, with the JS line driver, every register and write at every step | 0 mismatches |
 | `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start | 0 differences |
 | `pnpm check:lines` | the host's stitch with the JS line driver, against `codeToTokens` | identical |
@@ -137,7 +140,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 ## Grammar features and how the network covers them
 
 - **Captures inside a lookahead.** Oniguruma reports these captures, and vscode-textmate uses them when they start at or before the end of the match. A walk also walks the lookahead's first path in priority order.
-- **An atomic group inside a loop.** The jsdoc pattern for `[name=default]` has `(?>...)` inside `(...)*`, and the group can match nothing. Then Oniguruma ends the loop. Each atomic item therefore records its loop context. Stage A keeps the first end of the group as an integer.
+- **An atomic group inside a loop.** The jsdoc pattern for `[name=default]` has `(?>...)` inside `(...)*`, and the group can match nothing. Then Oniguruma ends the loop. Each atomic item therefore records its loop context. Stage A keeps the first end of the group as an integer. The step circuit keeps two bits for each node of the group's body instead: the body can end from the node, and the items after the group hold at the first end. Thus the step reads only position p + 1.
 - **An end pattern with a backreference.** `(\3)|(?=$|\*/)` refers to a group that captures `"` or `'`. The rule has one end variant for each value. The class of the captured code point selects the variant.
 - **`\G` and `\A`.** vscode-textmate compiles each scanner in four variants. Stage A computes the first pattern both with and without `\G` at the position.
 - **The endless-loop guards.** The checks after a pop, a push (`hasSameRuleAs`) and a match without progress are part of the driver.
@@ -164,7 +167,7 @@ Stage A takes about half to two thirds of the time: 0.23 s for lodash and 0.61 s
 | --- | --- |
 | `src/regex/` | Oniguruma patterns as automata (`nfa.ts`), closures in priority order (`closure.ts`), code point classes (`charsets.ts`), the reference matcher and a shiki `RegexEngine` made from it (`reference-engine.ts`, `engine.ts`) |
 | `src/compile/tables.ts` | The grammar's rules and scanners, and the theme as a state machine |
-| `src/net/` | Stage A: its schedule and a dense CPU evaluation (`stage-a.ts`), its GPU layout (`layout.ts`) |
+| `src/net/` | Stage A: its schedule and a dense CPU evaluation (`stage-a.ts`), its steps as handwired circuits (`stage-a-circuit.ts`), its GPU layout (`layout.ts`) |
 | `src/driver/` | The reference driver (`reference-driver.ts`), the line driver and the host's stitch (`line-driver.ts`), the driver's tables (`driver-tables.ts`), the expert circuits (`circuit.ts`) |
 | `src/gpu/` | The WebGPU device, the stage A kernel and the driver kernel |
 | `src/highlighter.ts` | `createGpuHighlighter(device)`: the whole pipeline |

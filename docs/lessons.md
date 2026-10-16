@@ -46,6 +46,7 @@ A push of a scope depends on the token attributes, and on which theme selectors 
 - **The driver is a gated mixture of experts.** The modes exclude each other, so the step is `Σ_m [mode = m] × expert_m`. Evaluating only the active expert gives the same value. Each expert stays small: 36 to 411 live operations.
 - **Windows keep the circuits small.** A step reads big memories only at positions that registers name: the record row at `q`, the frame at `top` and the frame at `guardPtr`. The host fills these as source cells before each step, in the same way as handwired's host loop. The driver tables are then the only large source cells.
 - **Reuse handwired's tools.** `compileTensorProgram` and the row writer in `json-search/emit.ts` turned the experts into WGSL with no changes. Index reads over runs of cells become buffer reads. All values are integers below 2^24, so Metal's fused multiply-add and changed order of addition cannot change a result.
+- **An integer that a step reads at a different position can become bits.** The atomic group's first end is an integer, and the group reads the record at that end. A recurrent step can read only p + 1. So stage A's step circuit keeps two bits for each body node: E, the body can end from the node, and A, the items after the group hold at the first end. Both follow the first item in priority order, as the end does. At an accept, A is the OR of the items after the group at p + 1. The check against the dense CPU evaluation, which keeps the integer, found 0 differences.
 - **A lockstep check is stricter than an output check.** The circuit check compares every register at every step. It found a difference in `wChunk` that changed no token, because the register is reset before the next read. The fix made the two machines equal register for register.
 
 ## 6. Parallel lines: from rounds to exactness
@@ -93,6 +94,7 @@ Each stage has an oracle that does not share its code:
 | Dense stage A against the lazy matcher | Nothing; it confirmed the schedule on all 19,765 nodes |
 | GPU stage A against the CPU | Nothing; it confirmed each kernel change, and it caught the silent dispatch failures |
 | Circuits against `lineStep`, in lockstep | Constants confused with wires (below); the `wChunk` difference |
+| Stage A's step circuits against the dense CPU | Nothing. A test with two wrong weights in the atomic group gave 7,187 differences, so the check can find an error |
 | Stitch against `codeToTokens` | The run that fell off its start; the collapsed prediction (in round counts) |
 
 The confusion of constants with wires came from handwired's `Wire` type. A wire is a number at runtime, so a helper that took "a number or a wire" took wires as constants, and the circuit returned wire indices as values. `selk` now takes two constants, and `selwk` takes a wire and a constant.

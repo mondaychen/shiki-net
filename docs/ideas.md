@@ -1,6 +1,6 @@
 # Ideas
 
-These are ideas that we did not try, and two that are now done. Each one says what to do, why it can help, and how large the work is. The measurements are from [lessons.md](lessons.md) and the README. Section 10 of lessons.md tells what the performance work changed, and which ideas did not work.
+These are ideas that we did not try, and some that are now done. Each one says what to do, why it can help, and how large the work is. The measurements are from [lessons.md](lessons.md) and the README. Section 10 of lessons.md tells what the performance work changed, and which ideas did not work.
 
 Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best order for value against effort: idea 11 (the longest line of three.min.js is in the first rounds, in the token run and at the end of stage A), then idea 7 (to show where the GPU wins), then idea 13 (to show that the result stays exact on more code).
 
@@ -29,7 +29,8 @@ Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best or
 
 13. **Test more code.** Four files are a small test set. The React builds are now fixtures, and they are identical to shiki. Compare the network with shiki on more code: the TypeScript compiler's sources, JSX, test262, and random JavaScript from a fuzzer. Each difference shows a part of the semantics that the network does not copy, or a feature that the compiler does not accept.
 14. **Other grammars and themes.** TypeScript and CSS will probably work. Markdown and HTML need injections, `while` rules and captures with patterns. This shows how general the compiler is.
-15. **Stage A as a handwired circuit.** Now only the driver is made of handwired circuits. Stage A has the same arithmetic, but in a kernel that we wrote by hand. Build the step of stage A with handwired's `Circuit`, and compare it with the dense CPU evaluation. Then all of the network is handwired in the same sense.
+15. **Done: stage A as a handwired circuit.** `src/net/stage-a-circuit.ts` builds the forward step and the backward step of stage A with handwired's `Circuit`. `pnpm check:stage-a-circuit` runs them with handwired's tensor evaluator and compares them with the dense CPU evaluation. On 30,590 positions of the four fixtures, with the long lines of three.min.js, there are 0 differences. Thus all of the network is handwired in the same sense. The backward step has 47,846 live operations in 12 layers, and it does all of them at each position. The GPU kernel does not run this circuit, because the kernel works only on the bits that hold (about 1% of the nodes). handwired's row writer can write the circuit as WGSL, but that kernel would be much slower.
+   - The atomic group's integer end became two bits for each body node (lessons.md, section 5). The kernel can use the same bits. Then it does not read the record at the end of the group.
 16. **Use the network as a model that can learn.** This is the purpose of handwired. Use the network as an exact front end, with fixed weights, for a model that learns. Or let its weights change, to learn a highlighter for a dialect that has no grammar.
 17. **A stitch that composes lines.** react-dom.development.js needs 347 rounds; lodash needs 84. The cause:
    - Round 1 runs every line from the root. From the root, a line that closes something does not pop: `  268435456;` that ends a multi-line `var X =`, or `  }` that ends a function. The openers still push. So the chain that round 2 predicts collects frames that are never popped, and many of its stacks are 64 frames deep.
