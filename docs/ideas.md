@@ -2,7 +2,7 @@
 
 These are ideas that we did not try, and some that are now done. Each one says what to do, why it can help, and how large the work is. The measurements are from [lessons.md](lessons.md) and the README. Section 10 of lessons.md tells what the performance work changed, and which ideas did not work.
 
-Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best order for value against effort: idea 11 (the longest line of three.min.js is in the first rounds, in the token run and at the end of stage A), then idea 7 (to show where the GPU wins), then idea 13 (to show that the result stays exact on more code).
+Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best order for value against effort: ideas 18 and 19 (hours each, and they use the same groups of lines), then idea 20 for three.min.js, then idea 11 (the longest line of three.min.js is in the first rounds, in the token run and at the end of stage A), then idea 7 (to show where the GPU wins), then idea 13 (to show that the result stays exact on more code).
 
 ## Quick changes (hours)
 
@@ -37,3 +37,24 @@ Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best or
    - After that, the chain past the frontier stays wrong but consistent with the old runs: most lines read only the top frame, and their top frames agree. The error shows only when the frontier gets to a closer, which reads below the top. So each round fixes about one closer: one function, or one `var` group of three lines.
    - A test gave the stitch the most frequent prefixes that runs read (from the final result, so this is the best case), and ran every line from each of them in round 2. With 8 prefixes: 86 rounds, and the rounds and the stitch took 356 ms, not 479 ms. With 16 prefixes: 23 rounds, but 632 ms, because of 450K extra runs. So more candidate starts are not a good fix.
    - The real fix is a different algorithm. A line is a function of the frames that it reads: it pops k frames and pushes others. Compose these functions in a parallel prefix tree, about 15 levels for 30K lines. The difficult part is a line whose function has many cases, one for each set of frames that it can read. This is research work, of several days.
+   - Idea 18 is a partial fix that is much easier.
+
+## Duplicates, convergence and overlap
+
+These ideas came from a second look at the code and the fixtures. A quick test of idea 18 is below. The other ideas have only counts.
+
+18. **Lines with the same text share their runs.** A run depends only on the line's text, the `firstLine` flag and the frames that it reads. So a run of one `  }` line is also a valid run for each other `  }` line with the same frames on top. Now `stitchLines` keeps the runs for each line, so the same closer must fail again in each round. Only 47% of lodash's lines are distinct, and 62% of react-dom's. A quick test grouped the lines by their text (line 0 stays alone), kept one list of runs for each group, and found valid runs through an index on the frames that each run read. The result stayed identical to shiki. The best of 4 calls, on a noisy machine:
+
+    | File | Rounds | Line runs | Driver |
+    | --- | --- | --- | --- |
+    | lodash | 84 → 20 | 56K → 42K | about 170 ms → 80 ms |
+    | react-dom | 347 → 51 | 72K → 57K | about 400 ms → 185 ms |
+    | react | 48 → 7 | 9.2K → 6.7K | about 50 ms → 21 ms |
+
+    The test's index made a string key for each line and each depth, so the host's stitch on lodash went from about 260 ms to 480 ms. Numeric keys or a trie can fix this. Two lines of a group with the same job in a round need only one job.
+19. **Stage A once for each distinct line.** A line's record depends only on its text, but `batchLines` sends every line. The distinct lines are 68% of lodash's code points, 82% of react-dom's and 88% of react's. lodash's stage A is limited by throughput, so it can become up to about 30% faster. A line then reads the record of the first line with the same text.
+20. **Segments inside long lines for stage A.** Idea 11 divides long lines for the driver. Stage A has the same problem: three.min.js's stage A (about 0.6 s) ends with its longest line alone. Calculate each segment backward from a guessed state at its right end, for example the state after a short warm-up. When the true state from the next segment is known, calculate again from it, and stop when the new state is equal to the guessed run's state at the same position. From there, all earlier states are equal, because the step is deterministic. The states of regex automata usually become equal after a few positions. The forward pass of the lookbehinds can use the same method. For three.min.js, this is probably the largest gain.
+21. **The token run during the last rounds.** After a round, every line before the first invalid line is final. Its token run can start with the next round, when the GPU is mostly idle. On three.min.js, the token run waits about 45 ms for the longest line. When that line becomes final early, its token run can go into an earlier dispatch.
+22. **Copy the row in runs of one class.** Leading whitespace is 15% to 16% of the code points of lodash and the React builds. When the class and the context bits stay the same, and the state at p + 1 is equal to the state at p + 2, the state at p is equal to the state at p + 1. Then stage A can copy the row and not calculate it. The comparison must include the lookbehind bits. Count first how often the condition holds.
+23. **Merge the nodes that have the same future.** `ok[c](p)` depends only on what follows c. Two nodes with the same class set and the same follow items (guard, target, marks, kind) have the same bits. A partition refinement, as in DFA minimization, can merge them. Most of the 19,765 nodes are lookahead internals, so probably some suffixes repeat. Fewer nodes make the record smaller (idea 10) and stage A faster. Count first how many nodes merge.
+24. **Predict the stack after a closer from the indentation.** With vscode-textmate's stacks: after a closer line (it starts with `}`, `)` or `]`, with less indentation than the line before it), the next line's start is equal to the start of the last earlier line at the closer's indentation. This is true for 79% of the closers of react-dom and 93% of lodash's. The host can use that start as the prediction when a line's best run did not pop. The chain stays exact, because the check of validity does not change. It works together with idea 18.
