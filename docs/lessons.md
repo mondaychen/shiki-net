@@ -171,3 +171,36 @@ The changes below took the network from 2.1 s to 0.28 s on lodash, and from 4.2 
   - A table, learned from all runs, of the frames that pop when a pop reveals them: 13, 7 and 93. A wrong guess of a pop is expensive in three.min.js, whose lines read up to 16 frames.
 - **Send fewer start frames.** A job got up to 64 frames of its predicted start, so the host built and the GPU read many frames that no run reads. Now a job gets 16 frames, or the full stack when the line's runs read deeper. The rounds and the stitch on lodash went from about 92 ms to 53 ms, and on react-dom.development.js from about 150 ms to 84 ms. With 8 frames, three.min.js needed 23 rounds, not 14.
 - **A long line waits for an exact start.** A round lasts as long as its longest run. In TypeScript's scanner.ts, four lines of 4,657 to 10,366 code points got a different speculative start in rounds 2, 3 and 5, and each of those rounds took about 40 ms. Now a line of more than 1,000 code points that has three runs gets a job only when it is the first invalid line. The rounds and the stitch on scanner.ts went from about 160 ms to 110 ms, and the other fixtures did not change. With lines that share their runs, scanner.ts needs 5 rounds before and after these changes, but it now takes about 30 ms (about 4%) longer: its long lines need a third run, in round 3, of about 40 ms. Before, their second run, from a wrong deep stack, was valid by chance. A limit of two runs would remove this, but it makes three.min.js much slower (below). Two rules were worse: with two runs, or with a limit of 300 code points, three.min.js needed 43 or 389 rounds, because its long lines then waited for each other.
+
+### The lite version
+
+The lite version (README, "The lite version") gives up exactness. `pnpm check:lite` measures how many characters have shiki's color and font style.
+
+- **Chunks of long lines in stage A worked.** Stage A on three.min.js went from about 530 ms to about 300 ms, with chunks of 512 positions and overlaps of 32 to 64 positions before and 64 to 128 after. Chunks of 1,024 and 2,048 gave about 350 ms, and chunks of 128 gave 350 ms, because of the overlaps' extra work. With chunks, stage A of three.min.js is limited by throughput, not by its longest line.
+- **The overlaps can be small.** All overlaps from 16/32 to 64/256 gave output identical to shiki on all fixtures. With 8/16, 67 characters of three.min.js were wrong. With 4/8 and less, a walk lost its path and its run hit the step limit. So the lite version runs stage A again, without chunks, for the lines whose runs fail. With no overlap, the result was then 99.2% correct.
+- **Stopping the rounds early was a bad trade.** After k rounds, each line that is not valid runs with tokens from its predicted start. The percentage of correct characters:
+
+  | Rounds | lodash | three.min.js | react | react-dom |
+  | --- | --- | --- | --- | --- |
+  | 4 | 98.23% | 96.74% | 99.70% | 99.79% |
+  | 8 | 99.92% | 97.44% | 100% | 100% |
+  | 16 | 99.987% | 98.70% | 100% | 100% |
+  | 32 | 100% | 99.62% | 100% | 100% |
+
+  The errors are not in a few lines. In lodash, whole lines of jsdoc examples lost their comment color, because the predicted start had no comment frame. In three.min.js, about 10 characters of many lines were wrong: `function` had the color of a function name, because a frame below the top was wrong. The time gain was small, because the late rounds are short. Only three.min.js gained, about 100 ms to 150 ms, and that was near the noise. react-dom needs 51 rounds, but its output is already identical after 8: its late rounds only make the frames below the top correct.
+- **After the stitch fix, the round limit is still a bad trade.** The stitch now predicts a line only as far as its run agrees (section 6), and the full version needs 6 to 14 rounds. With the lite default, three.min.js needs 24. The table above is from before the fix. After it, with a limit of 2, 4 and 8 rounds, three.min.js had 87.8%, 91.2% and 96.0% of its characters correct, and lodash 88.8%, 97.2% and 99.94%.
+- **Segments of long lines in the driver worked, when the boundaries move.** The table below is from before the stitch fix, when three.min.js needed 64 rounds. A segment's run starts its search at the segment's start and stops when its search gets to the segment's end, and the host stitches segments as lines. The best of 8 calls:
+
+  | Segment size | three.min.js driver | Rounds | scanner.ts driver |
+  | --- | --- | --- | --- |
+  | none | 317 ms | 64 | 212 ms |
+  | 1,024 | 293 ms | 62 | 48 ms |
+  | 512 | 307 ms | 70 | 34 ms |
+  | 256 | 289 ms | 107 | 29 ms |
+  | 128 | 198 ms | 107 | 27 ms |
+  | 64 | 182 ms | 134 | |
+
+  Most lines of three.min.js have about 500 to 600 code points, so only segments shorter than that help it. A round with one short job took from 0.5 ms to 3.8 ms, and an empty round trip to the GPU takes 0.2 ms. Where the rest of a late round's time goes is not measured yet. With boundaries at fixed places, segments of 128 gave 608 wrong characters on three.min.js, and segments of 32 gave 5,459. A boundary moved to just after `;`, `,`, `{` or `}`, in the 32 code points before it, gave none.
+- **After the stitch fix, segments help three.min.js less.** The best of 8 calls: without segments, the driver took 150 ms in 14 rounds. With segments of 512, 256 and 128, it took 130, 131 and 97 ms, in 15, 21 and 24 rounds. Segments of 1,024 took 216 ms in 49 rounds: their segments are longer than 1,000 code points, so they wait for exact starts (see "A long line waits for an exact start", above). On scanner.ts, segments of 128 still took the driver from 243 ms to 27 ms.
+- **The stop costs the full version nothing measurable.** The search expert checks `q >= segEnd`, and the full version sets segEnd to n + 1. This adds 5 operations to the search expert (139 to 144 with tokens). The driver on three.min.js took 326 ms to 333 ms, against 328 ms to 344 ms before (three runs each, in alternation). The search expert does not make the content token up to the segment's end, because that adds 22 operations. The host makes it, from the content scope of the end stack's top frame.
+- **Order changes the times.** When the lite version always ran second, it was up to 25% slower on files where it does the same work as the full version. `check:lite` now changes the order in each repeat.
