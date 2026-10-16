@@ -19,6 +19,32 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls, after one call to warm up. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 50%, mostly in stage A.
 
+## The lite version
+
+`codeToTokens(code, {lite: true})` gives up exactness for time on long lines. It makes two changes, so that a long line no longer sets the time of a stage:
+
+- **Chunks in stage A.** Stage A runs each line of more than about 700 code points as chunks: a chunk keeps 512 positions, and also runs 64 positions before them and 128 after them. The chunks run in parallel. A bit near a kept position is wrong when its match or its lookahead needs text past the overlap. When a wrong record makes a driver run fail, stage A runs that line again without chunks.
+- **Segments in the driver.** The driver runs each line of more than 192 code points as segments of 128 code points, or of a 64th of the line when that is longer (`src/driver/segments.ts`). The host stitches the segments as it stitches lines. A segment's run stops when its search gets to the segment's end, and the next segment starts from the search state where it stopped: `q`, whether `linePos` is `q`, and whether the anchor is `linePos`. The stitch checks that state as it checks the stack, so a match that goes past a boundary is not read again. A boundary goes just after `;`, `,`, `{` or `}` when one is near, because there the first guess of the state is usually right. The only state that a segment loses is the positions of the frames from earlier segments, as a line loses those of earlier lines. `pnpm check:driver-gpu` compares the joined segments of each long line with a run of the whole line: they are equal on all fixtures.
+
+`pnpm check:lite` compares the full and the lite version with shiki, character by character, and gives their times. The minified fixtures (`fixtures/minified`) have lines of up to 46,671 code points. shiki stops a line after 500 ms by default (`tokenizeTimeLimit`), so the check compares with shiki without that limit.
+
+| File | Longest line | Lite: characters as shiki | Full | Lite |
+| --- | --- | --- | --- | --- |
+| lodash@4.17.21 | 180 | 100% | 0.33 s | 0.32 s |
+| three@0.97.0 min | 7,113 | 100% | 0.69 s | 0.45 s |
+| react-dom@18.3.1 development | 1,352 | 100% | 0.65 s | 0.59 s |
+| scanner.ts (TypeScript) | 10,367 | 100% | 0.71 s | 0.16 s |
+| lodash, minified | 36,609 | 100% | 2.7 s | 0.15 s |
+| react-dom development, minified | 46,671 | 99.963% | 3.8 s | 0.93 s |
+| oniguruma-parser.min.js | 18,630 | 100% | 1.2 s | 0.19 s |
+| oniguruma-to-es.min.js | 19,453 | 100% | 1.2 s | 0.21 s |
+
+The first four rows are the best of 8 calls, and the others the best of 3, with the versions in alternation. react, lib.es5.d.ts and minified react are also 100% in the lite version. The 103 wrong characters of minified react-dom come from a chunk: a long template literal, whose lookahead needs more than 128 code points past the chunk. Tests with a regex literal and with an arrow function's parameter list of 220 code points across a chunk boundary also give wrong tokens. A larger overlap only moves this limit (docs/ideas.md, idea 25).
+
+On lines of tens of thousands of code points, the full version can also fail: its driver runs a line as one job in one command buffer, and on the minified fixtures macOS sometimes stops it, so the GPU device is lost. In the lite version, segments keep each job short.
+
+The lite version can also stop the host's rounds early, with `{lite: {maxRounds: k}}`. Each line that is not valid then runs from its predicted start. This is not in the default, because it is a bad trade: with 8 rounds, 4% of the characters of three.min.js are wrong, and the full version needs only 14 rounds. [docs/lessons.md](docs/lessons.md) (section 10) gives the measurements.
+
 ## Run
 
 You need Node 24 or later, pnpm, and a GPU that WebGPU can use. The two handwired files that the code imports are in `vendor/handwired` (see its README).
@@ -38,7 +64,7 @@ pnpm demo:build    # writes the page to dist/, for a static host; the page is di
 
 At each push to `main`, `.github/workflows/pages.yml` builds the page and puts it on GitHub Pages.
 
-Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The file list has a JavaScript sample and the two JavaScript fixtures, and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
+Use a recent Chrome, or another browser with WebGPU. The page compiles the JavaScript network's weights and shaders in about 1.5 s, and the TypeScript network's the first time you highlight TypeScript. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The Version menu selects the full version or the lite version. For the lite version, the page also gives the percentage of characters that have shiki's color. The file list has a JavaScript sample, two JavaScript fixtures and the minified react-dom (lines of up to 46,671 code points), and a TypeScript sample and two TypeScript files: `scanner.ts` from the TypeScript compiler and `lib.es5.d.ts`. The page compares with shiki without its time limit of 500 ms per line, because shiki stops the long lines of minified code early. The language menu selects the grammar for code that you edit. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for each file of the list. `pnpm check:demo --built` does the same for the page in `dist/`.
 
 Each stage also has its own check. The table in [How the result is verified](#how-the-result-is-verified) gives the commands.
 
@@ -136,10 +162,11 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 | `pnpm check:stage-a-gpu` | stage A on the GPU with stage A on the CPU, every record bit (a sample of lines) | 0 differences |
 | `pnpm check:stage-a-circuit` | stage A's step circuits, run by handwired's evaluator, with stage A on the CPU, every bit at every position (a sample of lines) | 0 differences |
 | `pnpm check:circuit` | the expert circuits, run by handwired's evaluator, with the JS line driver, every register and write at every step | 0 mismatches |
-| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start | 0 differences |
+| `pnpm check:driver-gpu` | the driver kernel with the JS line driver, every line from its exact start; for the lite version, the segments of each long line, and the joined segments against a run of the whole line | 0 differences |
 | `pnpm check:lines` | the host's stitch with the JS line driver, against `codeToTokens` | identical |
 | `pnpm test` | the full network on the GPU, against `codeToTokens` | identical |
-| `pnpm check:demo` | the demo page in a headless Chrome, which compares the network with shiki in the browser | identical |
+| `pnpm check:lite` | the full and the lite version against `codeToTokens` without its time limit, character by character, and the times of the two versions (the four JavaScript fixtures and the minified ones) | full: identical; lite: 100% except 103 characters of minified react-dom |
+| `pnpm check:demo` | the demo page in a headless Chrome, which compares the network with shiki in the browser; and the lite version, which must not fail | identical |
 
 ## Grammar features and how the network covers them
 
@@ -179,5 +206,5 @@ Stage A takes about two thirds of the time: about 0.18 s for lodash and 0.50 s f
 | `docs/lessons.md` | What the project taught us: semantics to copy, design decisions with their measurements, bugs, and WebGPU problems |
 | `src/decode.ts` | The network's output as shiki's tokens |
 | `scripts/` | The checks and the timers |
-| `fixtures/` | The four test files: lodash, three.min.js, and React's two development builds |
+| `fixtures/` | The test files: lodash, three.min.js, and React's two development builds; two TypeScript files (`typescript/`); and minified code for the lite version (`minified/`, see its README) |
 | `generated/named-sets.json` | The members of Oniguruma's named sets |

@@ -14,7 +14,7 @@ import {itemKind, localDepth, slotCount, walkChunk, type DriverTables} from './d
 import {noParent, invalidDepth, mode, kindBegin, kindEnd, kindMatch} from './line-driver.ts'
 
 export const scalarRegisters = [
-  'mode', 'n', 'tokens', 'linePos', 'anchor', 'firstLine', 'q', 'top', 'tapeLen', 'readDepth',
+  'mode', 'n', 'tokens', 'linePos', 'anchor', 'firstLine', 'q', 'segEnd', 'top', 'tapeLen', 'readDepth',
   'lastEnd', 'lastMeta', 'lastTokStart', 'tokCount',
   'pat', 'pRule', 'pKind', 's', 'e', 'adv',
   'wList', 'wChunk', 'wSub', 'rq', 'rKind', 'rNext', 'atomicStart', 'backrefClass',
@@ -51,7 +51,7 @@ export function cellLayout(t: DriverTables, recordedNodes: number, guardCount: n
   const position: [number, number] = [-1, maxPosition]
   const ref: [number, number] = [noParent, maxRef]
   const regRange: Record<ScalarRegister, [number, number]> = {
-    mode: [0, 9], n: [1, maxPosition], tokens: [0, 1], linePos: position, anchor: position, firstLine: [0, 1], q: position,
+    mode: [0, 9], n: [1, maxPosition], tokens: [0, 1], linePos: position, anchor: position, firstLine: [0, 1], q: position, segEnd: position,
     top: ref, tapeLen: [0, maxRef], readDepth: [1, invalidDepth],
     lastEnd: position, lastMeta: [-1, t.metaValues.length], lastTokStart: position, tokCount: [0, maxPosition],
     pat: [0, t.patternMain.length], pRule: [-1, t.ruleCount], pKind: [0, 2], s: position, e: position, adv: [0, 1],
@@ -285,14 +285,17 @@ export function buildExperts(t: DriverTables, layout: CellLayout, tokens = true)
       const entry = net.sel(useG, list, net.sum([[g, 1]], t.listLength.length))
       const first = net.bits(L.first, t.firstEntries, entry)
       const length = net.table('scannerListLength', [[scanner, 1]])
-      const found = net.lt(first, length)
-      const atEnd = net.and(net.not(found), net.eq(q, net.reg('n')))
-      const searching = net.and(net.not(found), net.not(atEnd))
+      // The end of a segment comes first; without segments, segEnd is n + 1, and it never holds.
+      const stop = net.geq(q, net.reg('segEnd'))
+      const go = net.not(stop)
+      const found = net.and(go, net.lt(first, length))
+      const atEnd = net.and(go, net.not(found), net.eq(q, net.reg('n')))
+      const searching = net.and(go, net.not(found), net.not(atEnd))
       const pat = net.sum([[net.table('scannerPatterns', [[scanner, 1]]), 1], [first, 1]])
       const pRule = net.table('patternRule', [[pat, 1]])
       const pKind = net.table('patternKind', [[pat, 1]])
       const wList = net.table('patternStartItem', [[pat, 1]])
-      d.next.mode = net.sum([[found, mode.walk - mode.search], [atEnd, mode.lineEnd1 - mode.search]], mode.search)
+      d.next.mode = net.sum([[found, mode.walk - mode.search], [atEnd, mode.lineEnd1 - mode.search], [stop, mode.done - mode.search]], mode.search)
       d.next.q = net.sum([[q, 1], [searching, 1]])
       d.next.pat = net.sel(found, net.reg('pat'), pat)
       d.next.pRule = net.sel(found, net.reg('pRule'), pRule)

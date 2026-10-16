@@ -15,6 +15,8 @@ const output = $<HTMLPreElement>('#output')
 const edit = $<HTMLButtonElement>('#edit')
 const step = $<HTMLSpanElement>('#step')
 const lang = $<HTMLSelectElement>('#lang')
+const version = $<HTMLSelectElement>('#version')
+const versionNote = $<HTMLSpanElement>('#version-note')
 const languageNames: Record<string, string> = {javascript: 'JavaScript', typescript: 'TypeScript'}
 
 const sample = `/**
@@ -120,6 +122,20 @@ function speedup(networkMs: number, shikiMs: number) {
   return ratio >= 1 ? `the network is ${ratio.toFixed(1)}× faster than shiki` : `the network is ${(1 / ratio).toFixed(1)}× slower than shiki`
 }
 
+// The share of characters that have shiki's color and font style, for the lite version.
+function sameCharacters(expected: ThemedToken[][], tokens: ThemedToken[][]) {
+  const styles = (line: ThemedToken[] = []) => line.flatMap(token => Array.from({length: token.content.length}, () => `${token.color}/${token.fontStyle}`))
+  let all = 0
+  let same = 0
+  expected.forEach((line, i) => {
+    const a = styles(line)
+    const b = styles(tokens[i])
+    all += a.length
+    a.forEach((style, k) => { if (style === b[k]) same++ })
+  })
+  return all ? same / all : 1
+}
+
 function shikiOff() {
   shiki.clearTimes(false)
   shiki.root.dataset.state = 'off'
@@ -155,6 +171,7 @@ const files: Record<string, {name: string, lang: BundledLanguage, text: () => Pr
   sample: {name: 'sample.js', lang: 'javascript', text: async () => sample},
   lodash: {name: 'lodash.js', lang: 'javascript', text: async () => (await import('../fixtures/lodash.js?raw')).default},
   three: {name: 'three.min.js', lang: 'javascript', text: async () => (await import('../fixtures/three.min.js?raw')).default},
+  reactDomMin: {name: 'react-dom.development.min.js', lang: 'javascript', text: async () => (await import('../fixtures/minified/react-dom.development.min.js?raw')).default},
   sampleTs: {name: 'sample.ts', lang: 'typescript', text: async () => sampleTs},
   scanner: {name: 'scanner.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/scanner.ts?raw')).default},
   es5: {name: 'lib.es5.d.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/lib.es5.d.ts?raw')).default},
@@ -245,7 +262,9 @@ async function main() {
     run.disabled = true
     for (const button of fileButtons) button.disabled = true
     lang.disabled = true
+    version.disabled = true
     const withShiki = compare.checked
+    const lite = version.value === 'lite'
     try {
       const text = code.value
       const language = lang.value as BundledLanguage
@@ -258,11 +277,12 @@ async function main() {
       const highlighter = await networkFor(language)
       setStatus(`Running the ${languageNames[language]} network on the GPU…`, 'busy')
       network.clearTimes(true)
+      versionNote.textContent = lite ? ', lite version' : ''
       if (withShiki) shiki.clearTimes(true)
       else shikiOff()
       await paint()
       let t1 = performance.now()
-      const {tokens, timings: t} = await highlighter.codeToTokens(text)
+      const {tokens, timings: t} = await highlighter.codeToTokens(text, {lite})
       const networkMs = performance.now() - t1
       network.set('total', ms(networkMs))
       network.set('stageA', ms(t.stageA))
@@ -283,14 +303,20 @@ async function main() {
       setStatus('Running shiki on the CPU, for the comparison…', 'busy')
       await paint()
       t1 = performance.now()
-      const expected = highlighter.shiki.codeToTokens(text, {lang: highlighter.lang, theme: highlighter.theme}).tokens
+      // By default, shiki stops a line after 500 ms and gives the rest of it one plain token; the network has no such
+      // limit. Minified code has lines that take longer, so the comparison is with shiki without the limit.
+      const expected = highlighter.shiki.codeToTokens(text, {lang: highlighter.lang, theme: highlighter.theme, tokenizeTimeLimit: 0}).tokens
       const shikiMs = performance.now() - t1
       shiki.set('total', ms(shikiMs))
       shiki.root.dataset.state = 'done'
       const differing: number[] = []
       expected.forEach((line: ThemedToken[], i: number) => { if (JSON.stringify(line) !== JSON.stringify(tokens[i])) differing.push(i + 1) })
       if (differing.length === 0 && expected.length === tokens.length) {
-        setStatus(`Identical to shiki: ${tokens.length.toLocaleString()} lines, ${count.toLocaleString()} tokens. In total time, ${speedup(networkMs, shikiMs)}.`, 'ok')
+        setStatus(`Identical to shiki${lite ? ' (lite version)' : ''}: ${tokens.length.toLocaleString()} lines, ${count.toLocaleString()} tokens. In total time, ${speedup(networkMs, shikiMs)}.`, 'ok')
+      } else if (lite) {
+        // The lite version can differ from shiki; this is not an error.
+        const share = sameCharacters(expected, tokens)
+        setStatus(`Lite version: ${differing.length} ${differing.length === 1 ? 'line differs' : 'lines differ'} from shiki, e.g. ${differing.slice(0, 10).join(', ')}. ${(100 * share).toFixed(share > 0.9999 ? 3 : 2)}% of characters are as shiki. In total time, ${speedup(networkMs, shikiMs)}.`)
       } else {
         setStatus(`${differing.length} lines differ from shiki, e.g. ${differing.slice(0, 10).join(', ')}.`, 'bad')
       }
@@ -303,6 +329,7 @@ async function main() {
       run.disabled = false
       for (const button of fileButtons) button.disabled = false
       lang.disabled = false
+      version.disabled = false
     }
   })
 }

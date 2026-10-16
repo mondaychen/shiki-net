@@ -16,7 +16,7 @@
         GitHub
       </a>
     </div>
-    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output.</p>
+    <p>shiki's JavaScript and TypeScript tokenizers as handwired neural networks, on your GPU through WebGPU. The page runs the network and shiki on the same code and compares their <code>codeToTokens</code> output. The full version is identical to shiki. The lite version is faster on long lines, and its tokens can differ from shiki's in rare cases.</p>
   </header>
   <section class="picker">
     <nav class="files" aria-label="Input files">
@@ -24,6 +24,7 @@
       <button data-load="sample" aria-current="true">sample.js</button>
       <button data-load="lodash">lodash.js</button>
       <button data-load="three">three.min.js</button>
+      <button data-load="reactDomMin">react-dom.min.js</button>
       <p class="group">TypeScript</p>
       <button data-load="sampleTs">sample.ts</button>
       <button data-load="scanner">scanner.ts</button>
@@ -37,6 +38,12 @@
           <select id="lang">
             <option value="javascript">JavaScript</option>
             <option value="typescript">TypeScript</option>
+          </select>
+        </label>
+        <label title="Full: identical to shiki. Lite: runs long lines as chunks in stage A and as segments in the driver, which is faster on long lines; a lookahead that needs text far past a chunk boundary can give wrong tokens.">Version
+          <select id="version">
+            <option value="full">Full (exact)</option>
+            <option value="lite">Lite (faster)</option>
           </select>
         </label>
         <label><input type="checkbox" id="compare" checked> Compare with shiki</label>
@@ -57,7 +64,7 @@
       <header class="pane-head">
         <div>
           <h2>Network</h2>
-          <p class="where">Handwired neural network, on the GPU</p>
+          <p class="where">Handwired neural network, on the GPU<span id="version-note"></span></p>
         </div>
         <div class="total">
           <span class="total-label">Total time <span class="total-note">codeToTokens, without render</span></span>
@@ -88,7 +95,7 @@
       </header>
       <div class="breakdown">
         <p class="breakdown-title">Parts of the total</p>
-        <p class="note">One step: shiki's <code>codeToTokens</code>, in the main thread of this page. It runs after the network, so the two do not share the machine. The code above shows the network’s tokens.</p>
+        <p class="note">One step: shiki's <code>codeToTokens</code>, without its time limit of 500 ms per line, in the main thread of this page. It runs after the network, so the two do not share the machine. The code above shows the network’s tokens.</p>
       </div>
     </article>
   </section>
