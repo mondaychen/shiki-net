@@ -158,6 +158,7 @@ Stage A takes about half of the time: 1.0 s for lodash and 2.0 s for three.min.j
 | `src/gpu/` | The WebGPU device, the stage A kernel and the driver kernel |
 | `src/highlighter.ts` | `createGpuHighlighter(device)`: the whole pipeline |
 | `demo/` | The demo page |
+| `docs/lessons.md` | What the project taught us: semantics to copy, design decisions with their measurements, bugs, and WebGPU problems |
 | `src/decode.ts` | The network's output as shiki's tokens |
 | `scripts/` | The checks and the timers |
 | `fixtures/` | The two test files |
