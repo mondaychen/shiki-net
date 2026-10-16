@@ -1,5 +1,6 @@
 // The driver's expert circuits, evaluated with handwired's tensor evaluator, against lineStep, in lockstep: every
-// register and every write at every step of the chosen lines. Usage: node scripts/check-circuit.ts [file] [lines]
+// register and every write at every step of the chosen lines. Usage: node scripts/check-circuit.ts [file] [lines] [--no-tokens]
+// (--no-tokens: the runs of the speculation rounds, which skip the captures)
 import fs from 'node:fs'
 import {compileTables} from '../src/compile/tables.ts'
 import {Program} from '../src/regex/program.ts'
@@ -10,8 +11,10 @@ import {lineStart, lineStep, endStack, runLine, noParent, mode, type FrameKey, t
 import {buildExperts, cellLayout, writeTables, scalarRegisters, frameFields} from '../src/driver/circuit.ts'
 import {tokenizedLines} from '../src/decode.ts'
 
-const file = process.argv[2] ?? 'fixtures/lodash.js'
-const count = Number(process.argv[3] ?? 60)
+const args = process.argv.slice(2).filter(arg => arg !== '--no-tokens')
+const withTokens = !process.argv.includes('--no-tokens')
+const file = args[0] ?? 'fixtures/lodash.js'
+const count = Number(args[1] ?? 60)
 const tables = await compileTables()
 const program = new Program(tables.bank)
 const a = compileStageA(tables, program)
@@ -19,7 +22,7 @@ const layout = buildLayout(tables, a)
 const t = buildDriverTables(tables, a, layout)
 const cells = cellLayout(t, layout.recordedNodes, layout.guardCount, layout.classCount)
 let t0 = performance.now()
-const experts = buildExperts(t, cells)
+const experts = buildExperts(t, cells, withTokens)
 console.log(`built ${experts.length} experts in ${(performance.now() - t0).toFixed(0)} ms: ${experts.map(e => e.circuit.operations.length).join(', ')} operations; ${cells.size} cells`)
 t0 = performance.now()
 const evaluators = new Map(experts.map(expert => {
@@ -52,7 +55,7 @@ for (let li = 0; li < lines.length; li++) {
     if (!key) return {rule: 0, endVariant: 0, capturedEOL: 0, nameTheme: 0, contentTheme: 0, parent: noParent, enterPos: -1, anchorPos: -1}
     return {...key, parent: depth + 1 < stack.length ? -(depth + 2) : noParent, enterPos: -1, anchorPos: -1}
   }
-  let r: LineRegisters = lineStart(n, li === 0, stack[0]!)
+  let r: LineRegisters = lineStart(n, li === 0, stack[0]!, withTokens)
   while (r.mode !== mode.done) {
     const row = rowAt(r.q)
     const top = view(r.top)

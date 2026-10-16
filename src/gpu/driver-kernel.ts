@@ -117,7 +117,7 @@ const NOPARENT: f32 = ${noParent}.0f;
 @group(0) @binding(6) var<storage, read_write> outTokens: array<u32>;
 @group(0) @binding(7) var<storage, read_write> tape: array<i32>;
 @group(0) @binding(8) var<storage, read_write> headers: array<i32>;
-@group(0) @binding(9) var<uniform> params: vec4u; // job count, step limit factor, store tokens
+@group(0) @binding(9) var<uniform> params: vec4u; // job count, step limit factor, store tokens, threads per job
 
 var<private> recRow: u32;
 
@@ -126,7 +126,9 @@ fn recByte(k: i32) -> f32 { return f32((rec[recRow + ${R.firstOffset}u + u32(k >
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let job = gid.x;
+  // With few jobs, each job has a SIMD group of its own, so that jobs in different modes do not wait for each other.
+  if (gid.x % params.w != 0u) { return; }
+  let job = gid.x / params.w;
   if (job >= params.x) { return; }
   let line = jobs[job * ${jobWords}u];
   let firstLine = jobs[job * ${jobWords}u + 1u];
@@ -146,6 +148,7 @@ ${scalarRegisters.map(name => `  var r_${name}: f32 = 0.0f;`).join('\n')}
   for (var i = 0; i < ${slotCount}; i++) { rs[i] = -1.0f; }
   r_mode = ${mode.search}.0f;
   r_n = f32(n);
+  r_tokens = f32(min(params.z, 1u));
   r_firstLine = f32(firstLine);
   r_top = -1.0f;
   r_readDepth = 1.0f;
@@ -248,10 +251,12 @@ export type DriverJob = {line: number, firstLine: boolean, start: FrameKeyLike[]
 type FrameKeyLike = {rule: number, endVariant: number, capturedEOL: number, nameTheme: number, contentTheme: number}
 export type DriverResult = {tokens: {start: number, meta: number}[], pushed: FrameKeyLike[], rest: number, top: number, readDepth: number, steps: number, status: number}
 
-export async function createDriver(device: GPUDevice, experts: Expert[], cells: CellLayout, stageLayout: Layout) {
+// `experts` make tokens; `plainExperts` (buildExperts with tokens false) run the jobs that make none.
+export async function createDriver(device: GPUDevice, experts: Expert[], plainExperts: Expert[], cells: CellLayout, stageLayout: Layout) {
   const weights = packDriverTables(cells, stageLayout)
   const code = driverWgsl(experts, cells, stageLayout, weights)
-  const pipeline = await compilePipeline(device, code)
+  const tokenPipeline = await compilePipeline(device, code)
+  const plainPipeline = await compilePipeline(device, driverWgsl(plainExperts, cells, stageLayout, weights))
   const tableBuffer = storageBuffer(device, weights.words)
   const params = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST})
   // Buffers that grow to the largest group they held, and are reused.
@@ -263,32 +268,50 @@ export async function createDriver(device: GPUDevice, experts: Expert[], cells: 
   }
   // Runs jobs on lines whose stage A buffers are on the GPU. `lengths[line]` is a line's n. Tokens are stored and read
   // only when `tokens` is set.
-  const run = async (gpu: {record: GPUBuffer, text: GPUBuffer, lines: GPUBuffer}, lengths: number[], jobs: DriverJob[], options: {tokens?: boolean, group?: number, stepFactor?: number} = {}) => {
-    const {tokens: storeTokens = false, group = 16384, stepFactor = 64} = options
+  const run = async (gpu: {record: GPUBuffer, text: GPUBuffer, lines: GPUBuffer}, lengths: number[], jobs: DriverJob[], options: {tokens?: boolean, group?: number, stepFactor?: number, spreadBelow?: number} = {}) => {
+    const {tokens: storeTokens = false, group = 16384, stepFactor = 64, spreadBelow = 4096} = options
     const results: DriverResult[] = []
     for (let lo = 0; lo < jobs.length; lo += group) {
       const part = jobs.slice(lo, lo + group)
       const jobWordsArray = new Uint32Array(part.length * jobWords)
-      const startWords: number[] = []
+      let startFrames = 0
+      for (const job of part) startFrames += job.start.length
+      const starts = new Int32Array(Math.max(1, startFrames * startFrameWords))
+      let startAt = 0
       let tokenBase = 0
       let tapeBase = 0
       part.forEach((job, i) => {
         const n = lengths[job.line]!
         const capacity = n + 16
-        jobWordsArray.set([job.line, job.firstLine ? 1 : 0, job.start.length, startWords.length, tokenBase, tapeBase, capacity], i * jobWords)
-        for (const key of job.start) startWords.push(key.rule, key.endVariant, key.capturedEOL, key.nameTheme, key.contentTheme)
+        const at = i * jobWords
+        jobWordsArray[at] = job.line
+        jobWordsArray[at + 1] = job.firstLine ? 1 : 0
+        jobWordsArray[at + 2] = job.start.length
+        jobWordsArray[at + 3] = startAt
+        jobWordsArray[at + 4] = tokenBase
+        jobWordsArray[at + 5] = tapeBase
+        jobWordsArray[at + 6] = capacity
+        for (const key of job.start) {
+          starts[startAt] = key.rule
+          starts[startAt + 1] = key.endVariant
+          starts[startAt + 2] = key.capturedEOL
+          starts[startAt + 3] = key.nameTheme
+          starts[startAt + 4] = key.contentTheme
+          startAt += startFrameWords
+        }
         if (storeTokens) tokenBase += n + 1
         tapeBase += capacity * tapeFrameWords
       })
       const jobBuffer = buffer('jobs', jobWordsArray.byteLength)
       device.queue.writeBuffer(jobBuffer, 0, jobWordsArray)
-      const starts = Int32Array.from(startWords.length ? startWords : [0])
       const startBuffer = buffer('starts', starts.byteLength)
       device.queue.writeBuffer(startBuffer, 0, starts)
       const tokenBuffer = buffer('tokens', tokenBase * 8)
       const tapeBuffer = buffer('tape', tapeBase * 4)
       const headerBuffer = buffer('headers', part.length * resultWords * 4)
-      device.queue.writeBuffer(params, 0, Uint32Array.of(part.length, stepFactor, storeTokens ? 1 : 0, 0))
+      const pipeline = storeTokens ? tokenPipeline : plainPipeline
+      const spread = part.length < spreadBelow ? 32 : 1
+      device.queue.writeBuffer(params, 0, Uint32Array.of(part.length, stepFactor, storeTokens ? 1 : 0, spread))
       const bindGroup = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [
         ...[tableBuffer, gpu.record, gpu.text, gpu.lines, jobBuffer, startBuffer, tokenBuffer, tapeBuffer, headerBuffer].map((b, binding) => ({binding, resource: {buffer: b}})),
         {binding: 9, resource: {buffer: params}},
@@ -297,7 +320,7 @@ export async function createDriver(device: GPUDevice, experts: Expert[], cells: 
       const pass = encoder.beginComputePass()
       pass.setPipeline(pipeline)
       pass.setBindGroup(0, bindGroup)
-      pass.dispatchWorkgroups(Math.ceil(part.length / 64))
+      pass.dispatchWorkgroups(Math.ceil(part.length * spread / 64))
       pass.end()
       device.queue.submit([encoder.finish()])
       const headers = new Int32Array((await readBuffer(device, headerBuffer, 0, part.length * resultWords * 4)).buffer)
@@ -320,5 +343,5 @@ export async function createDriver(device: GPUDevice, experts: Expert[], cells: 
     }
     return results
   }
-  return {run, code, pipeline}
+  return {run, code}
 }

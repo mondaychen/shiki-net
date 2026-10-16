@@ -15,7 +15,7 @@ const layout = buildLayout(tables, a)
 const device = await requestDevice()
 const three = tokenizedLines(fs.readFileSync('fixtures/three.min.js', 'utf8'))
 const longest = batchLines([three.reduce((x, y) => y.length > x.length ? y : x)])
-const all = ['a0', 'phase1', 'levels', 'mains', 'lists', 'record']
+const all = ['lb', 'body', 'phase1', 'levels', 'mains', 'lists', 'record']
 const variants: [string, string[]][] = process.argv.includes('--files') ? [['full', []]] : [['full', []], ...all.map(x => [`-${x}`, [x]] as [string, string[]]), ['barriers only', all]]
 for (const [name, skip] of variants) {
   const stage = await createStageA(device, layout, a.lookaheads, 1 << 13, new Set(skip))

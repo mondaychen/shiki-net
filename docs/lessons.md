@@ -78,7 +78,7 @@ A push of a scope depends on the token attributes, and on which theme selectors 
   - A barrier must be in uniform control flow. A value from a storage buffer is not uniform, so get it through `workgroupUniformLoad`.
   - `target` is a reserved word.
   - A private array with a dynamic index goes to slow thread memory. Our attempt to batch loads that way made phase 1 slower.
-- **Stage A is latency-bound, not occupancy-bound.** 256 threads per workgroup was best for both files. Phase 1, with about 4.5K member nodes and 12K items per position, was the largest cost. A list of member nodes per class, with one direct load per node, cut it by about 30%.
+- **Workgroup memory limits stage A's occupancy.** 256 threads per workgroup is best for both files. But with 16 KB of workgroup memory per line, 8 KB more made lodash 37% slower. Section 10 tells how the memory became smaller, and what happened next.
 - **Divergence costs about 2×.** When jobs of different modes share a SIMD group, a driver step goes from 3.3 µs to 7.6 µs.
 - **Counts before code.** Measuring sizes first (nodes, items, follow-list lengths, distinct mark sets, read depths) decided each layout. Some examples: 92% of follow lists have at most 4 items, so the walk weighs 4 items per step. 7,270 walk items have only 139 distinct mark sets, so 32 mark tables became small hot tables.
 
@@ -97,13 +97,55 @@ Each stage has an oracle that does not share its code:
 
 The confusion of constants with wires came from handwired's `Wire` type. A wire is a number at runtime, so a helper that took "a number or a wire" took wires as constants, and the circuit returned wire indices as values. `selk` now takes two constants, and `selwk` takes a wire and a constant.
 
-## 9. Where the time goes, and ideas not tried
+## 9. Where the time goes
 
-The network takes 1.8 s for lodash (shiki: 0.5 s) and 4.1 s for three.min.js (shiki: 5.3 s). Stage A takes about half, at about 97 µs per position. The driver takes the rest: lodash pays a fixed cost for each of its 84 rounds, and three.min.js waits for its longest lines.
+The first version took 1.8 s for lodash and 4.1 s for three.min.js. Section 10 tells how they became 0.53 s and 0.97 s (shiki: about 0.5 s and 5.2 s). Now:
 
-Ideas that we did not try:
+| | lodash | three.min.js |
+| --- | --- | --- |
+| Stage A | 0.36 s | 0.63 s |
+| Driver rounds and the token run | 0.12 s | 0.32 s |
+| Host stitch | 0.04 s | 0.01 s |
 
-- Process 32 short lines per workgroup, with bit lanes, to give stage A more parallel work per barrier.
-- Make the record smaller, so that more lines fit in fewer dispatches.
-- Run speculation on segments inside long lines, to shorten the longest job in three.min.js.
-- Check several positions in one search step, and do the event before captures in the walk's last step.
+- lodash's stage A is limited by throughput: 16K lines fill the GPU.
+- three.min.js's stage A is limited by its longest line (7,114 code points) at the end, when the other lines are complete.
+- three.min.js's driver has 64 rounds. A late round runs a line of about 500 code points, about 1,500 steps at about 2 µs per step. The first three rounds and the token run each wait for the longest line (about 9,000 steps).
+
+[ideas.md](ideas.md) has the ideas that we did not try.
+
+## 10. Performance work
+
+The changes below took the network from 2.1 s to 0.53 s on lodash, and from 4.2 s to 0.97 s on three.min.js. Every change kept the output identical, and every check in the README passed after it.
+
+### How to measure
+
+- **The machine is noisy.** The same run took from 154 ms to 191 ms, because other processes used the CPU and the GPU. So compare variants in alternation, in separate processes, several times, and compare the minimums. A comparison of single runs gave a wrong decision once (the unroll below).
+- **Latency and throughput are different.** `time:stage-a` measures one line, alone on the GPU. A whole file measures throughput. Some changes made one of them better and the other worse. Unrolling phase 1 by two made one line 5% faster and lodash 15% to 35% slower, probably because it used more registers. Measure both, and decide with the whole files.
+- **Remove a phase to find its cost.** The `skip` set of `createStageA` removes the work of a phase but keeps its barriers. On a whole file, this shows which phase uses the GPU's throughput. On one line, it shows which phase is on the critical path. The two lists were different.
+
+### Stage A
+
+- **Pack the bits that the threads only read.** The ok bits, guard bits, lookahead bits and main start bits went from one word per bit to 32 bits per word, and a third copy of the ok bits went away. Workgroup memory went from 16 KB to about 6.5 KB, and lodash became about 10% faster. After this, 8 KB more had no effect: the memory no longer limited occupancy.
+- **Contention on a packed word was not the problem.** Many threads clear guard bits in the same few words with `atomicAnd`. A word per guard bit made lodash slower (370 ms against 288 ms), probably because of the memory and the loop that packs the bits for the record.
+- **Push from the bits that hold, not pull over all candidates.** About 1% of the nodes hold at a position (about 213 of 19,765).
+  - Phase 1 now starts from each node that holds at p + 1, and sets its predecessors in the class at p. A table per class and per target gives the predecessors and their guard lists, so no member check is necessary. Phase 1 looked at about 4,160 members per position; now it looks at about 500 edges and 470 accepting items. Stage A on lodash went from 589 ms to 301 ms.
+  - Each list's first matching pattern now starts from the main start bits that hold (about 17 per position), and `atomicMin`s their places in the lists (about 80). The chunks of 16 patterns read 361 × 24 words per position. Stage A on lodash went from 395 ms to 301 ms.
+  - The same idea did not work for the lookahead start items (1,011) and the main start items (907): 358 ms against 302 ms. Their loops are short and regular, and the push pass is not.
+- **Remove the loads that depend on each other.**
+  - Phase 1 read a member's node, then its items at that node. Now the items are in member order, so the two loads are independent and neighbor threads read neighbor words.
+  - The `||` chain over four items made branches. Bitwise operations without branches made one line 15% faster.
+  - The atomic group's `bodyIndex` searched 20 global words for each item, in one thread. A table, and then constants in the shader code, made one line 20% faster.
+  - In A0, a guard list's anchors depend only on 7 bits of context. A table of guard bits per context replaced a loop over predicates.
+- **A long line needs latency, not throughput.** The state of each line waits in a buffer between dispatches. So the last dispatches, where at most 8 lines are still running, use a second pipeline with 1024 threads per workgroup. One line then takes 26 µs per position, not 38 µs. Stage A on three.min.js went from about 650 ms to 540 ms. lodash does not change.
+
+### The driver
+
+- **Speculation rounds do not need tokens.** The captures, the event before them, the capture slots and the token registers change no frame. A second set of experts, without them, runs the rounds. Only the final run makes tokens. The walk went from 413 to 204 live operations, and the search from 139 to 75. A step of a late round went from about 4 µs to 2.1 µs.
+- **Give a job its own SIMD group when there are few jobs.** In a late round, the few jobs were in one SIMD group, and jobs in different modes waited for each other. With fewer than 4,096 jobs, each job now has 32 threads, and 31 of them return. The driver for three.min.js went from 1.43 s to 0.66 s.
+- **The count of operations matters more than the length of the chain.** Tables by scanner and by pattern made the search's chain of reads shorter, and a walk list is now named by its first item. But a walk that read all four candidates' values and then picked one, to make the chain shorter, was 25% slower than a walk that reads the chosen item's values after the pick.
+- **One read for two guard bits.** The walk read a guard bit with and without `\G`, then selected one. The cell layout now pads the guard bits to whole words, as the record does, so one read at `guard + G × stride` gives the bit.
+
+### The host
+
+- **Interned keys as numbers.** The stitch made a string for each frame of each prefix of each job. A number made of the fields replaced the string, and the job prefixes are now key ids. The stitch on lodash went from 320 ms to 130 ms.
+- **Jump over the lines that do not change.** A line that got no run in a round, and whose start is the same stack object, keeps its choice and its end. So do the lines after it, up to the next line that got a run. The walk jumps over them. The stitch on lodash went from 130 ms to 60 ms, with the same rounds.

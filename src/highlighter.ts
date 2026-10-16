@@ -27,8 +27,9 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
   const t = buildDriverTables(tables, a, layout)
   const cells = cellLayout(t, layout.recordedNodes, layout.guardCount, layout.classCount)
   const experts = buildExperts(t, cells)
+  const plainExperts = buildExperts(t, cells, false)
   const stage = await createStageA(device, layout, a.lookaheads)
-  const driver = await createDriver(device, experts, cells, layout)
+  const driver = await createDriver(device, experts, plainExperts, cells, layout)
   const rootKey: FrameKey = {rule: t.rootRule, endVariant: 0, capturedEOL: 0, nameTheme: t.rootTheme, contentTheme: t.rootTheme}
 
   async function codeToTokens(code: string): Promise<{tokens: ThemedToken[][], timings: Timings}> {

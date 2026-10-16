@@ -14,7 +14,7 @@ import {itemKind, localDepth, slotCount, walkChunk, type DriverTables} from './d
 import {noParent, invalidDepth, mode, kindBegin, kindEnd, kindMatch} from './line-driver.ts'
 
 export const scalarRegisters = [
-  'mode', 'n', 'linePos', 'anchor', 'firstLine', 'q', 'top', 'tapeLen', 'readDepth',
+  'mode', 'n', 'tokens', 'linePos', 'anchor', 'firstLine', 'q', 'top', 'tapeLen', 'readDepth',
   'lastEnd', 'lastMeta', 'lastTokStart', 'tokCount',
   'pat', 'pRule', 'pKind', 's', 'e', 'adv',
   'wList', 'wChunk', 'wSub', 'rq', 'rKind', 'rNext', 'atomicStart', 'backrefClass',
@@ -51,11 +51,11 @@ export function cellLayout(t: DriverTables, recordedNodes: number, guardCount: n
   const position: [number, number] = [-1, maxPosition]
   const ref: [number, number] = [noParent, maxRef]
   const regRange: Record<ScalarRegister, [number, number]> = {
-    mode: [0, 9], n: [1, maxPosition], linePos: position, anchor: position, firstLine: [0, 1], q: position,
+    mode: [0, 9], n: [1, maxPosition], tokens: [0, 1], linePos: position, anchor: position, firstLine: [0, 1], q: position,
     top: ref, tapeLen: [0, maxRef], readDepth: [1, invalidDepth],
     lastEnd: position, lastMeta: [-1, t.metaValues.length], lastTokStart: position, tokCount: [0, maxPosition],
     pat: [0, t.patternMain.length], pRule: [-1, t.ruleCount], pKind: [0, 2], s: position, e: position, adv: [0, 1],
-    wList: [0, t.listStart.length], wChunk: [0, 64], wSub: [0, 2], rq: position, rKind: [0, 2], rNext: [-1, t.listStart.length],
+    wList: [0, t.itemKindOf.length], wChunk: [0, 64], wSub: [0, 2], rq: position, rKind: [0, 2], rNext: [-1, t.itemKindOf.length],
     atomicStart: position, backrefClass: [0, classCount],
     base: [0, t.themeMeta.length], capIndex: [0, 64], depth: [0, localDepth], guardPtr: ref, newTop: ref,
   }
@@ -75,18 +75,20 @@ export function cellLayout(t: DriverTables, recordedNodes: number, guardCount: n
   const aux = frame()
   const bits = (count: number) => { const start = ranges.length; for (let i = 0; i < count; i++) add([0, 1]); return start }
   const ok = bits(recordedNodes)
-  const guard = bits(guardCount)
+  // The guard bits are padded to whole words, as in the record, so that the bit with \G is guardG - guard cells after
+  // the bit without it, and one read over both runs takes either.
+  const guard = bits(Math.ceil(guardCount / 32) * 32)
   const guardG = bits(guardCount)
   const first = ranges.length
   for (let i = 0; i < t.firstEntries; i++) add([0, 255])
   const cls = add([0, classCount])
   const tableList: Record<string, ArrayLike<number>> = {
-    ruleKind: t.ruleKind, ruleName: t.ruleName, ruleContentName: t.ruleContentName, ruleBackrefGroup: t.ruleBackrefGroup,
-    scannerOf: t.scannerOf, scannerList: t.scannerList, scannerPatterns: t.scannerPatterns,
-    patternMain: t.patternMain, patternRule: t.patternRule, patternCaptureStart: t.patternCaptureStart, patternCaptureCount: t.patternCaptureCount,
-    listLength: t.listLength, listG: t.listG, captureGroup: t.captureGroup.length ? t.captureGroup : [0], captureName: t.captureName.length ? t.captureName : [0],
-    listStart: t.listStart, itemKindOf: t.itemKindOf, itemTarget: t.itemTarget, itemGuard: t.itemGuard, itemLook: t.itemLook, itemNext: t.itemNext,
-    mainStartList: t.mainStartList, lookStartList: t.lookStartList.length ? t.lookStartList : [0], backrefVariantOfClass: t.backrefVariantOfClass,
+    ruleName: t.ruleName, ruleContentName: t.ruleContentName, ruleBackrefGroup: t.ruleBackrefGroup,
+    scannerOf: t.scannerOf, scannerList: t.scannerList, scannerListLength: t.scannerListLength, scannerListG: t.scannerListG, scannerPatterns: t.scannerPatterns,
+    patternRule: t.patternRule, patternKind: t.patternKind, patternStartItem: t.patternStartItem, patternCaptureStart: t.patternCaptureStart, patternCaptureCount: t.patternCaptureCount,
+    captureGroup: t.captureGroup.length ? t.captureGroup : [0], captureName: t.captureName.length ? t.captureName : [0],
+    listEnd: t.listEnd, itemKindOf: t.itemKindOf, itemTarget: t.itemTarget, itemGuard: t.itemGuard, itemLook: t.itemLook, itemNext: t.itemNext,
+    lookStartList: t.lookStartList.length ? t.lookStartList : [0], backrefVariantOfClass: t.backrefVariantOfClass,
     themeNext: t.themeNext, themeMeta: t.themeMeta,
   }
   // An item's marks: the id of its set of marks, and per slot, a table over the sets.
@@ -123,9 +125,11 @@ export type ExpertOutput = {
 class Net {
   c: Circuit
   layout: CellLayout
+  tokens: boolean
   candidates = new Map<string, Wire[]>()
-  constructor(layout: CellLayout) {
+  constructor(layout: CellLayout, tokens: boolean) {
     this.layout = layout
+    this.tokens = tokens
     this.c = new Circuit(layout.size)
     layout.ranges.forEach(([lo, hi], cell) => {
       const wire = this.c.source(cell)
@@ -211,6 +215,7 @@ function draft(net: Net): Draft {
 
 // produce(state, end) when `active`: LineTokens.produceFromScopes with the line's token registers.
 function produce(net: Net, d: Draft, active: Wire, state: Wire, end: Wire) {
+  if (!net.tokens) return
   const get = (name: ScalarRegister) => d.next[name] ?? net.reg(name)
   const lastEnd = get('lastEnd')
   const lastMeta = get('lastMeta')
@@ -262,29 +267,31 @@ function advance(net: Net, d: Draft, active: Wire) {
 
 export type Expert = {mode: number, circuit: Circuit, output: ExpertOutput}
 
-export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
+// With `tokens` false, the experts for runs that make no tokens: search and walk keep no capture slots, and there are
+// no experts for pre and capture, which such runs never reach.
+export function buildExperts(t: DriverTables, layout: CellLayout, tokens = true): Expert[] {
   const L = layout
+  const backrefRule = t.ruleBackrefGroup.findIndex(group => group >= 0)
   const builders: [number, (net: Net, d: Draft) => void][] = [
     [mode.search, (net, d) => {
       const top = (f: FrameField) => net.cell(L.top[f])
       const q = net.reg('q')
       const linePos = net.reg('linePos')
       const scanner = net.table('scannerOf', [[top('rule'), 8], [top('endVariant'), 4], [net.reg('firstLine'), 2], [net.eq(linePos, net.reg('anchor')), 1]])
+      // The tables are read by the scanner or by the pattern, so that no read waits for a read of the list or the rule.
       const list = net.table('scannerList', [[scanner, 1]])
-      const g = net.table('listG', [[list, 1]])
+      const g = net.table('scannerListG', [[scanner, 1]])
       const useG = net.and(net.eq(q, linePos), net.geqk(g, 0))
       const entry = net.sel(useG, list, net.sum([[g, 1]], t.listLength.length))
       const first = net.bits(L.first, t.firstEntries, entry)
-      const length = net.table('listLength', [[list, 1]])
+      const length = net.table('scannerListLength', [[scanner, 1]])
       const found = net.lt(first, length)
       const atEnd = net.and(net.not(found), net.eq(q, net.reg('n')))
       const searching = net.and(net.not(found), net.not(atEnd))
       const pat = net.sum([[net.table('scannerPatterns', [[scanner, 1]]), 1], [first, 1]])
       const pRule = net.table('patternRule', [[pat, 1]])
-      const isEnd = net.not(net.geqk(pRule, 0))
-      const isMatch = net.eqk(net.table('ruleKind', [[pRule, 1]]), 0)
-      const pKind = net.sel(isEnd, net.selk(isMatch, kindBegin, kindMatch), net.k(kindEnd))
-      const wList = net.table('mainStartList', [[net.table('patternMain', [[pat, 1]]), 1]])
+      const pKind = net.table('patternKind', [[pat, 1]])
+      const wList = net.table('patternStartItem', [[pat, 1]])
       d.next.mode = net.sum([[found, mode.walk - mode.search], [atEnd, mode.lineEnd1 - mode.search]], mode.search)
       d.next.q = net.sum([[q, 1], [searching, 1]])
       d.next.pat = net.sel(found, net.reg('pat'), pat)
@@ -294,19 +301,20 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       d.next.wList = net.sel(found, net.reg('wList'), wList)
       d.next.wChunk = net.selwk(found, net.reg('wChunk'), 0)
       d.next.wSub = net.selwk(found, net.reg('wSub'), 0)
-      d.slots = d.slots.map(slot => net.selwk(found, slot, -1))
+      if (tokens) d.slots = d.slots.map(slot => net.selwk(found, slot, -1))
     }],
     [mode.walk, (net, d) => {
       const q = net.reg('q')
       const G = net.eq(q, net.reg('linePos'))
-      const base = net.sum([[net.table('listStart', [[net.reg('wList'), 1]]), 1], [net.reg('wChunk'), walkChunk]])
-      const end = net.table('listStart', [[net.reg('wList'), 1]], 1)
+      // wList is the list's first item, so the step reads the items without first reading where they start.
+      const base = net.sum([[net.reg('wList'), 1], [net.reg('wChunk'), walkChunk]])
+      const end = net.table('listEnd', [[net.reg('wList'), 1]])
       const picks: Wire[] = []
       for (let i = 0; i < walkChunk; i++) {
         const valid = net.lt(net.sum([[base, 1]], i), end)
         const guardId = net.table('itemGuard', [[base, 1]], i)
-        const guardCount = L.guardG - L.guard
-        const guard = net.sel(G, net.bits(L.guard, guardCount, guardId), net.bits(L.guardG, guardCount, guardId))
+        const guard = net.c.indexReadAffine([[guardId, 1], [G, L.guardG - L.guard]], 0, net.run(L.guard, L.first - L.guard), 'clamp', 'clamp')
+        net.c.assumeGrid(guard, 1)
         const kind = net.table('itemKindOf', [[base, 1]], i)
         const ok = net.or(net.eqk(kind, itemKind.accept), net.bits(L.ok, L.guard - L.ok, net.table('itemTarget', [[base, 1]], i)))
         picks.push(net.and(valid, guard, ok))
@@ -316,17 +324,21 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       const any = net.sum(firsts.map(f => [f, 1] as [Wire, number]))
       const chosen = net.sum([[base, 1], ...firsts.map((f, i) => [f, i] as [Wire, number])])
       const none = net.not(any)
+      // Reads at the chosen item, after the pick: reading the four candidates' values and summing their products with
+      // the pick waits less, but the extra reads made a step slower on the GPU.
       const kind = net.table('itemKindOf', [[chosen, 1]])
       const next = net.table('itemNext', [[chosen, 1]])
       const look = net.table('itemLook', [[chosen, 1]])
       const isLook = net.and(any, net.geqk(look, 0))
       const markSet = net.table('itemMarkSet', [[chosen, 1]])
-      d.slots = d.slots.map((slot, i) => net.sel(net.and(any, net.table(`mark${i}`, [[markSet, 1]])), slot, q))
-      const pRule = net.reg('pRule')
-      const backrefGroup = net.table('ruleBackrefGroup', [[pRule, 1]])
-      const backrefMark = net.or(...Array.from({length: slotCount / 2}, (_, g) => net.and(net.eqk(backrefGroup, g), net.table(`mark${2 * g}`, [[markSet, 1]]))))
-      const takesClass = net.and(any, net.geqk(pRule, 0), net.eqk(net.reg('wSub'), 0), backrefMark)
-      d.next.backrefClass = net.sel(takesClass, net.reg('backrefClass'), net.cell(L.cls))
+      if (tokens) d.slots = d.slots.map((slot, i) => net.sel(net.and(any, net.table(`mark${i}`, [[markSet, 1]])), slot, q))
+      // The class at the start of the backreferenced group, when the walk is the backreferencing rule's begin pattern.
+      // buildDriverTables allows one such rule.
+      if (backrefRule >= 0) {
+        const backrefMark = net.table(`mark${2 * t.ruleBackrefGroup[backrefRule]!}`, [[markSet, 1]])
+        const takesClass = net.and(any, net.eqk(net.reg('pRule'), backrefRule), net.eqk(net.reg('wSub'), 0), backrefMark)
+        d.next.backrefClass = net.sel(takesClass, net.reg('backrefClass'), net.cell(L.cls))
+      }
       // continueWith(kind, next), or after a lookahead walk's accept, continueWith(rKind, rNext) at rq.
       const wSub = net.reg('wSub')
       const returning = net.and(any, net.not(isLook), net.eqk(kind, itemKind.accept), net.eqk(wSub, 1))
@@ -363,7 +375,7 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       d.next.q = qNext
       d.next.e = net.sel(mainDone, net.reg('e'), at)
       d.next.adv = net.sel(mainDone, net.reg('adv'), net.gt(at, net.reg('linePos')))
-      d.next.mode = net.selk(mainDone, mode.walk, mode.pre)
+      d.next.mode = net.sel(mainDone, net.k(mode.walk), tokens ? net.selk(net.reg('tokens'), mode.post, mode.pre) : net.k(mode.post))
     }],
     [mode.pre, (net, d) => {
       const isEnd = net.eqk(net.reg('pKind'), kindEnd)
@@ -371,7 +383,8 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       d.next.base = net.sel(isEnd, theme(net, net.cell(L.top.contentTheme), net.table('ruleName', [[net.reg('pRule'), 1]])), net.cell(L.top.nameTheme))
       d.next.capIndex = net.k(0)
       d.next.depth = net.k(0)
-      d.next.mode = net.selk(net.geqk(net.table('patternCaptureCount', [[net.reg('pat'), 1]]), 1), mode.post, mode.capture)
+      const captures = net.and(net.geqk(net.table('patternCaptureCount', [[net.reg('pat'), 1]]), 1), net.reg('tokens'))
+      d.next.mode = net.selk(captures, mode.post, mode.capture)
     }],
     [mode.capture, (net, d) => {
       const pat = net.reg('pat')
@@ -412,9 +425,11 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       d.next.mode = net.selk(net.and(net.not(net.lt(capIndexNext, count)), net.eqk(depthNext, 0)), mode.capture, mode.post)
     }],
     [mode.post, (net, d) => {
-      produce(net, d, net.k(1), net.reg('base'), net.reg('e'))
       const top = (f: FrameField) => net.cell(L.top[f])
       const pKind = net.reg('pKind')
+      // The scope of the match, as pre computes it: the top frame does not change between the two.
+      const base = net.sel(net.eqk(pKind, kindEnd), theme(net, top('contentTheme'), net.table('ruleName', [[net.reg('pRule'), 1]])), top('nameTheme'))
+      produce(net, d, net.k(1), base, net.reg('e'))
       const adv = net.reg('adv')
       const linePos = net.reg('linePos')
       const isEnd = net.eqk(pKind, kindEnd)
@@ -430,7 +445,7 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       const safePop = net.and(matchStops, net.not(net.eqk(top('parent'), noParent)))
       // Begin: push a frame; when it read nothing, check hasSameRuleAs before keeping it.
       const pRule = net.reg('pRule')
-      const content = theme(net, net.reg('base'), net.table('ruleContentName', [[pRule, 1]]))
+      const content = theme(net, base, net.table('ruleContentName', [[pRule, 1]]))
       const hasBackref = net.geqk(net.table('ruleBackrefGroup', [[pRule, 1]]), 0)
       const variant = net.sel(hasBackref, net.k(0), net.table('backrefVariantOfClass', [[net.reg('backrefClass'), 1]]))
       const beginGuards = net.and(isBegin, net.not(adv))
@@ -441,7 +456,7 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
         rule: net.sel(isBegin, top('rule'), pRule),
         endVariant: net.sel(isBegin, top('endVariant'), variant),
         capturedEOL: net.sel(isBegin, top('capturedEOL'), net.eq(net.reg('e'), net.reg('n'))),
-        nameTheme: net.sel(isBegin, top('nameTheme'), net.reg('base')),
+        nameTheme: net.sel(isBegin, top('nameTheme'), base),
         contentTheme: net.sel(isBegin, top('nameTheme'), content),
         parent: net.sel(isBegin, top('parent'), net.reg('top')),
         enterPos: net.sel(isBegin, top('enterPos'), linePos),
@@ -493,8 +508,8 @@ export function buildExperts(t: DriverTables, layout: CellLayout): Expert[] {
       d.next.mode = net.k(mode.done)
     }],
   ]
-  return builders.map(([m, build]) => {
-    const net = new Net(layout)
+  return builders.filter(([m]) => tokens || (m !== mode.pre && m !== mode.capture)).map(([m, build]) => {
+    const net = new Net(layout, tokens)
     const d = draft(net)
     build(net, d)
     return {mode: m, circuit: net.c, output: finish(net, d)}

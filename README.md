@@ -12,10 +12,10 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 | File | Lines | Tokens | Result | Network (GPU) | shiki (CPU) |
 | --- | --- | --- | --- | --- | --- |
-| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 1.8 s | 0.5 s |
-| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 4.1 s | 5.3 s |
+| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.53 s | 0.5 s |
+| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.97 s | 5.2 s |
 
-Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders.
+Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 30%.
 
 ## Run
 
@@ -67,7 +67,7 @@ code ─► lines ─► stage A: the regex network ─► one record per positi
 
 ### Stage A: the regex network
 
-Stage A finds, for each position of a line, which pattern of each scanner matches first at that position. Lines are independent, so the GPU runs one workgroup per line (`src/gpu/stage-a-kernel.ts`).
+Stage A finds, for each position of a line, which pattern of each scanner matches first at that position. Lines are independent, so the GPU runs one workgroup per line (`src/gpu/stage-a-kernel.ts`). The kernel computes the recurrence below from the bits that hold: at a position, about 1% of the nodes hold. For example, each node that holds at p + 1 sets its predecessors that are members of the class at p.
 
 The main recurrence goes backward over the positions of the line. For each of the 19,765 automaton nodes:
 
@@ -99,6 +99,8 @@ The step is a mixture of experts gated by the exact one-hot of the mode. Exactly
 A step reads source cells: registers, tables, and windows. Before each step, the host fills the windows from registers: the record row at `q`, the class at `q`, the frame at `top` and the frame at `guardPtr`. A step writes at most one token and one frame. The stack is an append-only tape of frames, like vscode-textmate's immutable `StateStack`.
 
 handwired compiles each expert (`compileTensorProgram`). handwired's row writer (`json-search/emit.ts`) writes it as WGSL statements. `src/gpu/driver-kernel.ts` puts each expert in one case of a `switch` on the mode. It maps cells to registers and index reads to buffer reads.
+
+There are two sets of experts. The set with tokens runs the final run of each line. The set without tokens runs the speculation rounds. It has no captures, no event before the captures, no capture slots and no token registers, because they change no frame. Its walk and search have about 40% fewer operations.
 
 ### The host: lines in parallel
 
@@ -148,7 +150,9 @@ Each check compares two independent implementations. Each check runs on both fix
 
 ## Performance
 
-Stage A takes about half of the time: 1.0 s for lodash and 2.0 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. The time per position is about 97 µs on the longest line. The driver takes 0.5 s for lodash, where 84 rounds have a fixed cost each, and 2.1 s for three.min.js. There, a round lasts as long as its longest line (9,426 steps at about 3 µs per step).
+Stage A takes about two thirds of the time: 0.36 s for lodash and 0.63 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. lodash's 16K lines fill the GPU, so its stage A is limited by throughput. three.min.js's stage A ends with its longest line alone, at about 26 µs per position. The driver takes 0.12 s for lodash and 0.32 s for three.min.js. There, a late round lasts as long as its longest line, about 1,500 steps at about 2 µs per step.
+
+[docs/lessons.md](docs/lessons.md) (section 10) tells what made the network four times faster than its first version, and what did not work.
 
 `pnpm time:stage-a` and `pnpm time:driver` measure the two kernels.
 

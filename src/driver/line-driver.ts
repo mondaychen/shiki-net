@@ -31,7 +31,7 @@ export type FrameKey = {rule: number, endVariant: number, capturedEOL: number, n
 export type LocalFrame = FrameKey & {parent: number, enterPos: number, anchorPos: number}
 
 export type LineRegisters = {
-  mode: number, n: number, linePos: number, anchor: number, firstLine: number, q: number,
+  mode: number, n: number, tokens: number, linePos: number, anchor: number, firstLine: number, q: number,
   top: number, tapeLen: number, readDepth: number,
   lastEnd: number, lastMeta: number, lastTokStart: number, tokCount: number,
   pat: number, pRule: number, pKind: number, s: number, e: number, adv: number,
@@ -47,9 +47,11 @@ export type FrameView = FrameKey & {parent: number, enterPos: number, anchorPos:
 export type LineWindows = {row: RecordRow, top: FrameView, aux: FrameView}
 export type LineWrites = {token?: {index: number, start: number, meta: number}, frame?: LocalFrame}
 
-export function lineStart(n: number, firstLine: boolean, startTop: FrameKey): LineRegisters {
+// Without `tokens`, a run makes no tokens, and so skips the event before captures and the captures, and keeps no
+// capture slots: they only make tokens, and change no frame.
+export function lineStart(n: number, firstLine: boolean, startTop: FrameKey, tokens = true): LineRegisters {
   return {
-    mode: mode.search, n, linePos: 0, anchor: startTop.capturedEOL ? 0 : -1, firstLine: firstLine ? 1 : 0, q: 0,
+    mode: mode.search, n, tokens: tokens ? 1 : 0, linePos: 0, anchor: startTop.capturedEOL ? 0 : -1, firstLine: firstLine ? 1 : 0, q: 0,
     top: -1, tapeLen: 0, readDepth: 1,
     lastEnd: 0, lastMeta: -1, lastTokStart: 0, tokCount: 0,
     pat: 0, pRule: 0, pKind: 0, s: 0, e: 0, adv: 0,
@@ -67,7 +69,7 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
   const writes: LineWrites = {}
   const theme = (state: number, name: number) => t.themeNext[state * (t.nameCount + 1) + name]!
   const produce = (state: number, end: number) => {
-    if (x.lastEnd >= end) return
+    if (!x.tokens || x.lastEnd >= end) return
     const meta = t.themeMeta[state]!
     if (x.tokCount > 0 && x.lastMeta === meta) { x.lastEnd = end; return }
     if (writes.token) throw new Error('two tokens in one step')
@@ -86,15 +88,15 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
     case mode.search: {
       const scanner = t.scannerOf[top.rule * 8 + top.endVariant * 4 + x.firstLine * 2 + (x.linePos === x.anchor ? 1 : 0)]!
       const list = t.scannerList[scanner]!
-      const g = t.listG[list]!
+      const g = t.scannerListG[scanner]!
       const first = x.q === x.linePos && g >= 0 ? w.row.first(t.listLength.length + g) : w.row.first(list)
-      if (first < t.listLength[list]!) {
+      if (first < t.scannerListLength[scanner]!) {
         x.pat = t.scannerPatterns[scanner]! + first
         x.pRule = t.patternRule[x.pat]!
-        x.pKind = x.pRule < 0 ? kindEnd : t.ruleKind[x.pRule] === 0 ? kindMatch : kindBegin
+        x.pKind = t.patternKind[x.pat]!
         x.s = x.q
-        x.slots.fill(-1)
-        x.wList = t.mainStartList[t.patternMain[x.pat]!]!
+        if (x.tokens) x.slots.fill(-1)
+        x.wList = t.patternStartItem[x.pat]!
         x.wChunk = 0
         x.wSub = 0
         x.mode = mode.walk
@@ -107,8 +109,8 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
     }
     case mode.walk: {
       const G = x.q === x.linePos
-      const base = t.listStart[x.wList]! + x.wChunk * walkChunk
-      const end = t.listStart[x.wList + 1]!
+      const base = x.wList + x.wChunk * walkChunk
+      const end = t.listEnd[x.wList]!
       let chosen = -1
       for (let i = 0; i < walkChunk; i++) {
         const item = base + i
@@ -124,7 +126,7 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
       }
       // A chosen item ends the chunk count, whatever comes next.
       x.wChunk = 0
-      for (let slot = 0; slot < slotCount; slot++) {
+      if (x.tokens) for (let slot = 0; slot < slotCount; slot++) {
         const mask = slot < 16 ? t.itemMarks[chosen]! : t.itemMarksHigh[chosen]!
         if ((mask >>> (slot & 15)) & 1) x.slots[slot] = x.q
       }
@@ -133,7 +135,7 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
       const continueWith = (kind: number, next: number) => {
         if (kind === itemKind.char) { x.wList = next; x.wChunk = 0; x.q++; return }
         if (kind === itemKind.atomic) { x.atomicStart = x.q; x.wList = t.atomicBodyList; x.wChunk = 0; x.wSub = 2; return }
-        if (x.wSub === 0) { x.e = x.q; x.adv = x.e > x.linePos ? 1 : 0; x.mode = mode.pre; return }
+        if (x.wSub === 0) { x.e = x.q; x.adv = x.e > x.linePos ? 1 : 0; x.mode = x.tokens ? mode.pre : mode.post; return }
         if (x.wSub === 1) { x.q = x.rq; x.wSub = 0; continueWith(x.rKind, x.rNext); return }
         x.wList = x.q > x.atomicStart ? t.atomicAfterList : t.atomicAfterEmptyList
         x.wChunk = 0
@@ -157,7 +159,7 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
       x.base = x.pKind === kindEnd ? top.nameTheme : theme(top.contentTheme, t.ruleName[x.pRule]!)
       x.capIndex = 0
       x.depth = 0
-      x.mode = t.patternCaptureCount[x.pat]! > 0 ? mode.capture : mode.post
+      x.mode = t.patternCaptureCount[x.pat]! > 0 && x.tokens ? mode.capture : mode.post
       break
     case mode.capture: {
       // handleCaptures, one group with a capture rule or one local scope per step.
@@ -192,7 +194,9 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
       break
     }
     case mode.post: {
-      produce(x.base, x.e)
+      // The scope of the match, as pre computes it: the top frame does not change between the two.
+      const base = x.pKind === kindEnd ? top.nameTheme : theme(top.contentTheme, t.ruleName[x.pRule]!)
+      produce(base, x.e)
       if (x.pKind === kindEnd) {
         if (!x.adv && top.enterPos === x.linePos) {
           if (top.contentTheme !== top.nameTheme) {
@@ -217,10 +221,10 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
           x.mode = mode.search
         }
       } else {
-        const content = theme(x.base, t.ruleContentName[x.pRule]!)
+        const content = theme(base, t.ruleContentName[x.pRule]!)
         const variant = t.ruleBackrefGroup[x.pRule]! >= 0 ? t.backrefVariantOfClass[x.backrefClass]! : 0
         if (variant < 0) throw new Error('the backreferenced group captured an unknown text')
-        writes.frame = {parent: x.top, rule: x.pRule, endVariant: variant, enterPos: x.linePos, anchorPos: x.anchor, capturedEOL: x.e === x.n ? 1 : 0, nameTheme: x.base, contentTheme: content}
+        writes.frame = {parent: x.top, rule: x.pRule, endVariant: variant, enterPos: x.linePos, anchorPos: x.anchor, capturedEOL: x.e === x.n ? 1 : 0, nameTheme: base, contentTheme: content}
         const pushed = x.tapeLen
         x.tapeLen++
         x.anchor = x.e
@@ -280,7 +284,7 @@ export type LineResult = {
 }
 
 // Runs one line from a start stack, given as frame keys from the top down.
-export function runLine(t: DriverTables, n: number, firstLine: boolean, start: FrameKey[], rowAt: (q: number) => RecordRow): LineResult {
+export function runLine(t: DriverTables, n: number, firstLine: boolean, start: FrameKey[], rowAt: (q: number) => RecordRow, withTokens = true): LineResult {
   const frames: LocalFrame[] = []
   const tokens: {start: number, meta: number}[] = []
   const view = (ref: number): FrameView => {
@@ -291,7 +295,7 @@ export function runLine(t: DriverTables, n: number, firstLine: boolean, start: F
     if (!key) return {rule: 0, endVariant: 0, capturedEOL: 0, nameTheme: 0, contentTheme: 0, parent: noParent, enterPos: -1, anchorPos: -1}
     return {...key, parent: depth + 1 < start.length ? -(depth + 2) : noParent, enterPos: -1, anchorPos: -1}
   }
-  let r = lineStart(n, firstLine, start[0]!)
+  let r = lineStart(n, firstLine, start[0]!, withTokens)
   let steps = 0
   while (r.mode !== mode.done) {
     const {next, writes} = lineStep(t, r, {row: rowAt(r.q), top: view(r.top), aux: view(r.guardPtr)})
@@ -332,40 +336,57 @@ const drop = (stack: Stack, count: number): Stack => { for (let i = 0; i < count
 // longest. The rounds end when a walk finds every line valid. That chain is exact: line 0 starts from the root, and a
 // valid run's end is exact when its start is. Each round, the first invalid line has an exact start, so it is valid
 // after its run, and the rounds end. A walk starts at the first line that got a run in the round, since the lines
-// before it kept their runs and their starts.
+// before it kept their runs and their starts. In the same way, a line that got no run and kept its start (the same
+// stack object) keeps its choice and its end, and so do the lines after it up to the next line that got a run: the
+// walk jumps over them.
 export async function stitchLines(
   lineCount: number, rootKey: FrameKey,
   runLines: (lines: number[], starts: FrameKey[][]) => Promise<LineResult[]>,
   maxDepth = 64,
 ): Promise<{results: LineResult[], prefixes: FrameKey[][], rounds: number, runs: number}> {
-  const keyIds = new Map<string, number>()
+  // Keys are interned by a number made of their fields: names and themes are below 2^16, and the end variant below 16.
+  const keyIds = new Map<number, number>()
   const keys: FrameKey[] = []
   const idOf = (k: FrameKey) => {
-    const text = `${k.rule},${k.endVariant},${k.capturedEOL},${k.nameTheme},${k.contentTheme}`
-    let id = keyIds.get(text)
-    if (id === undefined) { id = keys.length; keyIds.set(text, id); keys.push(k) }
+    const code = (((k.rule * 16 + k.endVariant) * 2 + k.capturedEOL) * 65536 + k.nameTheme) * 65536 + k.contentTheme
+    let id = keyIds.get(code)
+    if (id === undefined) { id = keys.length; keyIds.set(code, id); keys.push(k) }
     return id
   }
   const root = push(idOf(rootKey), null)
   const runs: {prefix: number[], keys: FrameKey[], pushed: number[], result: LineResult}[][] = Array.from({length: lineCount}, () => [])
   const starts: StackNode[] = new Array(lineCount).fill(root)
   const chosen: number[] = new Array(lineCount).fill(-1)
-  let jobs: {line: number, prefix: FrameKey[]}[] = Array.from({length: lineCount}, (_, line) => ({line, prefix: [rootKey]}))
+  const ends: Stack[] = new Array(lineCount).fill(null)
+  const fresh = new Uint8Array(lineCount)
+  let jobs: {line: number, prefix: number[]}[] = Array.from({length: lineCount}, (_, line) => ({line, prefix: [root.key]}))
   let rounds = 0
   let total = 0
   for (;;) {
     rounds++
     total += jobs.length
-    const out = await runLines(jobs.map(job => job.line), jobs.map(job => job.prefix))
-    let first = lineCount
+    const jobKeys = jobs.map(job => job.prefix.map(id => keys[id]!))
+    const out = await runLines(jobs.map(job => job.line), jobKeys)
+    fresh.fill(0)
     jobs.forEach((job, k) => {
-      runs[job.line]!.push({prefix: job.prefix.map(idOf), keys: job.prefix, pushed: out[k]!.pushed.map(idOf), result: out[k]!})
-      first = Math.min(first, job.line)
+      runs[job.line]!.push({prefix: job.prefix, keys: jobKeys[k]!, pushed: out[k]!.pushed.map(idOf), result: out[k]!})
+      fresh[job.line] = 1
     })
+    // The lines that got a run, in order.
+    const freshLines = jobs.map(job => job.line).sort((x, y) => x - y)
+    const first = freshLines[0]!
+    let nextFresh = 0
     jobs = []
     let stack: Stack = starts[first]!
     for (let line = first; line < lineCount; line++) {
       if (!stack) stack = root
+      if (stack === starts[line] && !fresh[line] && chosen[line]! >= 0) {
+        while (nextFresh < freshLines.length && freshLines[nextFresh]! <= line) nextFresh++
+        const until = nextFresh < freshLines.length ? freshLines[nextFresh]! : lineCount
+        stack = ends[until - 1]!
+        line = until - 1
+        continue
+      }
       starts[line] = stack
       chosen[line] = -1
       let best = -1
@@ -387,8 +408,8 @@ export async function stitchLines(
       } else {
         const needed = best >= 0 ? lineRuns[best]!.result.readDepth : 1
         const depth = needed > maxDepth ? stack.length : Math.min(stack.length, maxDepth)
-        const prefix: FrameKey[] = []
-        for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(keys[node.key]!)
+        const prefix: number[] = []
+        for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(node.key)
         jobs.push({line, prefix})
         if (best >= 0) {
           // A run that popped past its prefix's bottom popped the whole prefix, and the predicted frames below come next.
@@ -398,6 +419,7 @@ export async function stitchLines(
           stack = next
         }
       }
+      ends[line] = stack
     }
     if (jobs.length === 0) {
       return {
