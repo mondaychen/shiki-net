@@ -31,7 +31,7 @@ export type FrameKey = {rule: number, endVariant: number, capturedEOL: number, n
 export type LocalFrame = FrameKey & {parent: number, enterPos: number, anchorPos: number}
 
 export type LineRegisters = {
-  mode: number, n: number, tokens: number, linePos: number, anchor: number, firstLine: number, q: number, segEnd: number,
+  mode: number, n: number, tokens: number, linePos: number, anchor: number, firstLine: number, q: number,
   top: number, tapeLen: number, readDepth: number,
   lastEnd: number, lastMeta: number, lastTokStart: number, tokCount: number,
   pat: number, pRule: number, pKind: number, s: number, e: number, adv: number,
@@ -49,19 +49,11 @@ export type LineWrites = {token?: {index: number, start: number, meta: number}, 
 
 // Without `tokens`, a run makes no tokens, and so skips the event before captures and the captures, and keeps no
 // capture slots: they only make tokens, and change no frame.
-//
-// A segment of a long line, in the lite version, starts its search at `start`, and stops when its search gets to `end`
-// (lineStep). Its first token starts at `start`. Its start differs from the state of a run of the whole line: the
-// position where the search starts, the anchor and the frames' positions. So its tokens near `start` can be wrong.
-// Without a segment, `end` is n + 1, which no search gets to.
-export type Segment = {start: number, end: number}
-export function lineStart(n: number, firstLine: boolean, startTop: FrameKey, tokens = true, segment: Segment = {start: 0, end: n + 1}): LineRegisters {
-  const at = segment.start
+export function lineStart(n: number, firstLine: boolean, startTop: FrameKey, tokens = true): LineRegisters {
   return {
-    mode: mode.search, n, tokens: tokens ? 1 : 0, linePos: at, anchor: startTop.capturedEOL && at === 0 ? 0 : -1, firstLine: firstLine && at === 0 ? 1 : 0, q: at,
-    segEnd: segment.end,
+    mode: mode.search, n, tokens: tokens ? 1 : 0, linePos: 0, anchor: startTop.capturedEOL ? 0 : -1, firstLine: firstLine ? 1 : 0, q: 0,
     top: -1, tapeLen: 0, readDepth: 1,
-    lastEnd: at, lastMeta: -1, lastTokStart: at, tokCount: 0,
+    lastEnd: 0, lastMeta: -1, lastTokStart: 0, tokCount: 0,
     pat: 0, pRule: 0, pKind: 0, s: 0, e: 0, adv: 0,
     slots: new Array(slotCount).fill(-1),
     wList: 0, wChunk: 0, wSub: 0, rq: 0, rKind: 0, rNext: 0, atomicStart: 0, backrefClass: 0,
@@ -94,12 +86,6 @@ export function lineStep(t: DriverTables, r: LineRegisters, w: LineWindows): {ne
   const top = w.top
   switch (r.mode) {
     case mode.search: {
-      if (x.q >= x.segEnd) {
-        // The end of a segment. The text from lastEnd to the end has the content scope of the top frame: the host adds
-        // that token, from the end stack, so that the step does not need a produce here.
-        x.mode = mode.done
-        break
-      }
       const scanner = t.scannerOf[top.rule * 8 + top.endVariant * 4 + x.firstLine * 2 + (x.linePos === x.anchor ? 1 : 0)]!
       const list = t.scannerList[scanner]!
       const g = t.scannerListG[scanner]!
@@ -295,11 +281,10 @@ export type LineResult = {
   top: number
   readDepth: number
   steps: number
-  lastEnd: number // where the tokens end: the end of the line, or, for a segment, the end of its last token (see mode.search)
 }
 
 // Runs one line from a start stack, given as frame keys from the top down.
-export function runLine(t: DriverTables, n: number, firstLine: boolean, start: FrameKey[], rowAt: (q: number) => RecordRow, withTokens = true, segment?: Segment): LineResult {
+export function runLine(t: DriverTables, n: number, firstLine: boolean, start: FrameKey[], rowAt: (q: number) => RecordRow, withTokens = true): LineResult {
   const frames: LocalFrame[] = []
   const tokens: {start: number, meta: number}[] = []
   const view = (ref: number): FrameView => {
@@ -310,7 +295,7 @@ export function runLine(t: DriverTables, n: number, firstLine: boolean, start: F
     if (!key) return {rule: 0, endVariant: 0, capturedEOL: 0, nameTheme: 0, contentTheme: 0, parent: noParent, enterPos: -1, anchorPos: -1}
     return {...key, parent: depth + 1 < start.length ? -(depth + 2) : noParent, enterPos: -1, anchorPos: -1}
   }
-  let r = lineStart(n, firstLine, start[0]!, withTokens, segment)
+  let r = lineStart(n, firstLine, start[0]!, withTokens)
   let steps = 0
   while (r.mode !== mode.done) {
     const {next, writes} = lineStep(t, r, {row: rowAt(r.q), top: view(r.top), aux: view(r.guardPtr)})
@@ -329,7 +314,7 @@ export function runLine(t: DriverTables, n: number, firstLine: boolean, start: F
   }
   // A run that popped past its start's bottom read one frame more than its start has.
   const readDepth = r.readDepth === invalidDepth ? start.length + 1 : r.readDepth
-  return {tokens, pushed, rest: ref !== noParent ? -ref - 1 : -1, top: r.top, readDepth, steps, lastEnd: r.lastEnd}
+  return {tokens, pushed, rest: ref !== noParent ? -ref - 1 : -1, top: r.top, readDepth, steps}
 }
 
 // The stack after a line: the frames it pushed, then its start from `rest` down.
@@ -382,18 +367,12 @@ const trieNode = (): Trie => ({next: null, valid: -1, first: -1})
 //
 // `runLines` gets one line of each job's group. In the result, `choices` names each line's run: lines with the same
 // choice have the same tokens.
-//
-// With `maxRounds`, the lite version stops after that many rounds, although some lines are not valid. Such a line
-// gets no run: its prefix is its whole predicted start, its result is undefined, and its choice is a new id that the
-// lines with the same job share. The caller runs it from that start. The chain is then not exact past the first such
-// line, but the predicted starts are usually correct in the top frames, which most lines read.
 export async function stitchLines(
   lineCount: number, rootKey: FrameKey,
   runLines: (lines: number[], starts: FrameKey[][]) => Promise<LineResult[]>,
   groupOf: ArrayLike<number> = Array.from({length: lineCount}, (_, line) => line),
   lengths: ArrayLike<number> = [], maxDepth = 16, longLine = 1000,
-  maxRounds = Infinity,
-): Promise<{results: (LineResult | undefined)[], prefixes: FrameKey[][], choices: number[], rounds: number, runs: number}> {
+): Promise<{results: LineResult[], prefixes: FrameKey[][], choices: number[], rounds: number, runs: number}> {
   // Keys are interned by a number made of their fields: names and themes are below 2^16, and the end variant below 16.
   const keyIds = new Map<number, number>()
   const keys: FrameKey[] = []
@@ -450,11 +429,8 @@ export async function stitchLines(
     sharing = []
     waiting = []
     let exact = true
-    // Per group, the prefixes of this round's jobs and the jobs' indices.
-    const roundJobs = new Map<number, {prefix: number[], job: number}[]>()
-    // The last round of the lite version: invalid lines keep their whole predicted start, and get no run.
-    const last = rounds >= maxRounds
-    const jobOf = last ? new Map<number, number>() : null
+    // Per group, the prefixes of this round's jobs.
+    const roundJobs = new Map<number, number[][]>()
     let stack: Stack = starts[first]!
     for (let line = first; line < lineCount; line++) {
       if (!stack) stack = root
@@ -489,21 +465,15 @@ export async function stitchLines(
         stack = next
       } else {
         const needed = best >= 0 ? lineRuns[best]!.result.readDepth : 1
-        const depth = needed > maxDepth || last ? stack.length : Math.min(stack.length, maxDepth)
+        const depth = needed > maxDepth ? stack.length : Math.min(stack.length, maxDepth)
         const prefix: number[] = []
         for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(node.key)
         const groupJobs = roundJobs.get(group)
-        const same = groupJobs?.find(other => other.prefix.length === prefix.length && other.prefix.every((key, i) => key === prefix[i]))
-        if (same) {
-          sharing.push(line)
-          jobOf?.set(line, same.job)
-        } else if (!exact && !last && lineRuns.length >= 3 && lengths[line]! > longLine) {
-          waiting.push(line)
-        } else {
-          const job = {prefix, job: jobs.length}
-          if (groupJobs) groupJobs.push(job)
-          else roundJobs.set(group, [job])
-          jobOf?.set(line, jobs.length)
+        if (groupJobs?.some(other => other.length === prefix.length && other.every((key, i) => key === prefix[i]))) sharing.push(line)
+        else if (!exact && lineRuns.length >= 3 && lengths[line]! > longLine) waiting.push(line)
+        else {
+          if (groupJobs) groupJobs.push(prefix)
+          else roundJobs.set(group, [prefix])
           jobs.push({line, prefix})
         }
         exact = false
@@ -520,11 +490,11 @@ export async function stitchLines(
       }
       ends[line] = stack
     }
-    if (jobs.length === 0 || jobOf) {
+    if (jobs.length === 0) {
       return {
-        results: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.result : undefined),
-        prefixes: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.keys : jobs[jobOf!.get(line)!]!.prefix.map(id => keys[id]!)),
-        choices: chosen.map((k, line) => k >= 0 ? runs[groupOf[line]!]![k]!.id : total + jobOf!.get(line)!),
+        results: chosen.map((k, line) => runs[groupOf[line]!]![k]!.result),
+        prefixes: chosen.map((k, line) => runs[groupOf[line]!]![k]!.keys),
+        choices: chosen.map((k, line) => runs[groupOf[line]!]![k]!.id),
         rounds, runs: total,
       }
     }

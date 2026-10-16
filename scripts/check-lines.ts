@@ -50,8 +50,7 @@ for (const file of files.length ? files : ['fixtures/lodash.js', 'fixtures/three
   const lengths = lines.map(line => [...line].length + 1)
   const t0 = performance.now()
   const runner = async (which: number[], starts: FrameKey[][]) => which.map((line, k) => runLine(t, lengths[line]!, line === 0, starts[k]!, rowAt(line)))
-  const {results: chosen, rounds, runs} = await stitchLines(lines.length, rootKey, runner, lineGroups(lines), lengths)
-  const results = chosen.map(r => r!)
+  const {results, rounds, runs} = await stitchLines(lines.length, rootKey, runner, lineGroups(lines), lengths)
   const ms = performance.now() - t0
   const ours = decodeTokens(code, results.map(r => r.tokens), t.metaValues, tables.colorMap)
   const expected = tables.highlighter.codeToTokens(code, {lang: 'javascript', theme: 'github-dark'}).tokens

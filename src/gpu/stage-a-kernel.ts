@@ -303,7 +303,7 @@ export function stageAWgsl(layout: Layout, weights: StageAWeights, skip: Set<str
       for (var t = lid; ${skipped}t < count; t += ${threads}u) { let at = ${o[`level${i}Pairs`]}u + 2u * (first + t); lookEntry(W[at] >> 2u, W[at + 1u]); }
     }
     workgroupBarrier();`
-    const call = kinds.size === 1 && kinds.has(0) ? `guardEntry(code >> 2u, word);` : `runEntry(code, word, p, n);`
+    const call = kinds.size === 1 && kinds.has(0) ? `guardEntry(code >> 2u, word);` : `runEntry(code, word, p, n, lineRecord);`
     return `
     for (var t = lid; ${skipped}t < ${len[`level${i}`]! / 2}u; t += ${threads}u) { let code = W[${o[`level${i}`]}u + 2u * t]; let word = W[${o[`level${i}`]}u + 2u * t + 1u]; ${call} }
     workgroupBarrier();`
@@ -335,9 +335,7 @@ const STATE: u32 = ${stateWords(layout)}u; // per line: reach bits (A0), then ok
 @group(0) @binding(0) var<storage, read> W: array<u32>;
 ${phase1 === 'push' ? '' : '@group(0) @binding(1) var<storage, read> items4: array<vec4u>;'}
 @group(0) @binding(2) var<storage, read> text: array<u32>;
-// Per unit (a line, or a chunk of a long line in the lite version; see unitTable): first code point in text, n
-// (positions holding a code point), the kept positions [keepStart, keepEnd), their first record row, and the first
-// scratch row, for the positions outside the kept ones.
+// Per line: first code point in text, n (positions holding a code point), first record row.
 @group(0) @binding(3) var<storage, read> lines: array<u32>;
 @group(0) @binding(4) var<storage, read_write> rec: array<u32>;
 @group(0) @binding(5) var<storage, read_write> lbs: array<u32>;
@@ -368,17 +366,6 @@ var<workgroup> anchorBitsS: u32; // A1: which anchors hold at p, one bit per anc
 var<workgroup> textStartS: u32;
 var<workgroup> nS: i32;
 var<workgroup> recordS: u32;
-var<workgroup> keepStartS: i32;
-var<workgroup> keepEndS: i32;
-var<workgroup> scratchS: u32;
-
-// The record row of position p. A chunk keeps only its middle positions in the line's record; its other positions
-// are in scratch rows, so that the atomic group can still read them.
-fn rowOf(p: i32) -> u32 {
-  if (p < keepStartS) { return scratchS + u32(p); }
-  if (p < keepEndS) { return recordS + u32(p - keepStartS); }
-  return scratchS + u32(keepStartS + p - keepEndS);
-}
 
 fn classAt(p: i32, n: i32) -> u32 {
   if (p < 0 || p >= n) { return END; }
@@ -476,7 +463,7 @@ fn guardEntry(id: u32, word: u32) {
 fn lookEntry(id: u32, word: u32) {
   if (guardC(word >> 16u) && bitC(word & 0xFFFFu)) { atomicOr(&laC[id >> 5u], 1u << (id & 31u)); }
 }
-fn runEntry(code: u32, word: u32, p: i32, n: i32) {
+fn runEntry(code: u32, word: u32, p: i32, n: i32, lineRecord: u32) {
   let kind = code & 3u;
   let id = code >> 2u;
   if (kind == 0u) { guardEntry(id, word); }
@@ -486,7 +473,7 @@ fn runEntry(code: u32, word: u32, p: i32, n: i32) {
     // are constants of the grammar, written into the code, so that the one thread that runs it waits on no loads of them.
     var end = -1;
 ${atomicBodyCode}
-    let at = rowOf(max(end, p));
+    let at = lineRecord + u32(max(end, p));
     let okEmpty = ${anyItem(atomic.afterEmpty, item => `(u32(guardC(${item >>> 16}u)) & u32(bitC(${item & 0xFFFF}u)))`)};
     let okAfter = ${anyItem(atomic.after, item => `(u32(recordedGuard(at, ${item >>> 16}u)) & u32(recordedBit(at, ${item & 0xFFFF}u)))`)};
     let ok = select(select(0u, okAfter, end > p), okEmpty, end == p);
@@ -498,15 +485,13 @@ ${atomicBodyCode}
 fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid: u32) {
   let line = wid.x + params.z;
   if (lid == 0u) {
-    textStartS = lines[line * 6u];
-    nS = i32(lines[line * 6u + 1u]);
-    keepStartS = i32(lines[line * 6u + 2u]);
-    keepEndS = i32(lines[line * 6u + 3u]);
-    recordS = lines[line * 6u + 4u];
-    scratchS = lines[line * 6u + 5u];
+    textStartS = lines[line * 3u];
+    nS = i32(lines[line * 3u + 1u]);
+    recordS = lines[line * 3u + 2u];
   }
   // Uniform for the whole workgroup, so that the loops around the barriers are uniform.
   let n = workgroupUniformLoad(&nS);
+  let lineRecord = workgroupUniformLoad(&recordS);
   // Steps 0..n are A0 at position t, steps n + 1..2n + 1 are A1 at position 2n + 1 - t. A dispatch runs at most
   // params.y steps from params.x, and the line's state waits in \`state\` for the next dispatch, so that no command
   // buffer runs long enough for macOS to stop it.
@@ -559,7 +544,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid:
           }
         }
         workgroupBarrier();
-        let row = rowOf(p);
+        let row = lineRecord + u32(p);
         for (var w = lid; w < LBBW; w += ${threads}u) { lbs[row * LBBW + w] = atomicLoad(&lbBits[w]); }
         for (var w = lid; w < LBNW; w += ${threads}u) { atomicStore(&reach[w], atomicLoad(&reachNext[w])); }
         workgroupBarrier();
@@ -572,7 +557,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid:
         workgroupBarrier();
       }
       let p = 2 * n + 1 - t;
-        let row = rowOf(p);
+        let row = lineRecord + u32(p);
         if (lid < 2u) { clsS[lid] = classAt(p - 1 + i32(lid), n); }
         workgroupBarrier();
         let cls = clsS[1];
@@ -746,33 +731,6 @@ export function batchLines(lines: string[]): LineBatch {
   return {text: Uint32Array.from(cps), lines: Uint32Array.from(info), rows, lineCount: lines.length}
 }
 
-// Chunks of long lines, for the lite version. A chunk keeps `size` positions, and also runs `left` positions before
-// them and `right` positions after them, so that the lookbehinds and the matches near its kept positions see most of
-// their text. A kept bit is wrong only when its match needs text past the overlap.
-export type ChunkOptions = {size: number, left: number, right: number}
-export const defaultChunks: ChunkOptions = {size: 512, left: 64, right: 128}
-
-// The units that stage A runs, 6 words each (see the kernel's \`lines\`), and the record's rows with the scratch rows.
-// Without chunks, a unit is a line, and it keeps all its positions.
-export function unitTable(batch: LineBatch, chunks?: ChunkOptions): {units: Uint32Array, count: number, rows: number} {
-  const units: number[] = []
-  let scratch = batch.rows
-  for (let line = 0; line < batch.lineCount; line++) {
-    const start = batch.lines[line * 3]!
-    const n = batch.lines[line * 3 + 1]!
-    const row = batch.lines[line * 3 + 2]!
-    if (!chunks || n + 1 <= chunks.size + chunks.left + chunks.right) { units.push(start, n, 0, n + 1, row, 0); continue }
-    for (let s = 0; s <= n; s += chunks.size) {
-      const e = Math.min(n + 1, s + chunks.size)
-      const a = Math.max(0, s - chunks.left)
-      const b = Math.min(n, e + chunks.right)
-      units.push(start + a, b - a, s - a, e - a, row + s, scratch)
-      scratch += (s - a) + (b - a + 1) - (e - a)
-    }
-  }
-  return {units: Uint32Array.from(units), count: units.length / 6, rows: scratch}
-}
-
 // Lines in groups whose records fit `rowCapacity` rows. A line longer than the capacity is an error.
 export function chunkLines(lines: string[], rowCapacity: number): {first: number, lines: string[]}[] {
   const chunks: {first: number, lines: string[]}[] = []
@@ -803,13 +761,16 @@ export async function createStageA(device: GPUDevice, layout: Layout, lookaheadA
   const lbWordsPerRow = Math.max(1, Math.ceil(layout.lookbehindCount / 32))
   const stateBuffer = storageBuffer(device, lineGroup * stateWords(layout) * 4)
   const paramBuffers: GPUBuffer[] = []
-  type Buffers = {record: GPUBuffer, text: GPUBuffer, lines: GPUBuffer, scratch: GPUBuffer}
-  const dispatchUnits = async (units: {units: Uint32Array, count: number}, gpu: Buffers, stepsPerDispatch: number) => {
-    const unitBuffer = storageBuffer(device, units.units)
+  // Runs every line of the batch; returns the buffers that hold the batch on the GPU, record included.
+  const run = async (batch: LineBatch, stepsPerDispatch = 192) => {
+    const textBuffer = storageBuffer(device, batch.text)
+    const lineBuffer = storageBuffer(device, batch.lines)
+    const record = storageBuffer(device, batch.rows * layout.record.words * 4)
+    const scratch = storageBuffer(device, batch.rows * lbWordsPerRow * 4)
     let dispatch = 0
-    for (let lo = 0; lo < units.count; lo += lineGroup) {
-      const count = Math.min(lineGroup, units.count - lo)
-      const steps = Array.from({length: count}, (_, i) => 2 * (units.units[(lo + i) * 6 + 1]! + 1))
+    for (let lo = 0; lo < batch.lineCount; lo += lineGroup) {
+      const count = Math.min(lineGroup, batch.lineCount - lo)
+      const steps = Array.from({length: count}, (_, i) => 2 * (batch.lines[(lo + i) * 3 + 1]! + 1))
       const maxSteps = Math.max(...steps)
       for (let first = 0; first < maxSteps; first += stepsPerDispatch, dispatch++) {
         const running = steps.filter(t => t > first).length
@@ -817,7 +778,7 @@ export async function createStageA(device: GPUDevice, layout: Layout, lookaheadA
         const params = paramBuffers[dispatch] ??= device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST})
         device.queue.writeBuffer(params, 0, Uint32Array.of(first, stepsPerDispatch, lo, 0))
         const bindGroup = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [
-          ...[weightBuffer, items4Buffer, gpu.text, unitBuffer, gpu.record, gpu.scratch].map((buffer, binding) => ({binding, resource: {buffer}})).filter(({binding}) => binding !== 1 || phase1 !== 'push'),
+          ...[weightBuffer, items4Buffer, textBuffer, lineBuffer, record, scratch].map((buffer, binding) => ({binding, resource: {buffer}})).filter(({binding}) => binding !== 1 || phase1 !== 'push'),
           {binding: 6, resource: {buffer: params}}, {binding: 7, resource: {buffer: stateBuffer}},
         ]})
         const encoder = device.createCommandEncoder()
@@ -830,30 +791,8 @@ export async function createStageA(device: GPUDevice, layout: Layout, lookaheadA
       }
     }
     await device.queue.onSubmittedWorkDone()
-  }
-  // Runs every line of the batch; returns the buffers that hold the batch on the GPU, record included. With `chunks`
-  // (the lite version), long lines run as chunks with overlaps.
-  const run = async (batch: LineBatch, options: {chunks?: ChunkOptions, stepsPerDispatch?: number} = {}): Promise<Buffers> => {
-    const {chunks, stepsPerDispatch = 192} = options
-    const units = unitTable(batch, chunks)
-    const gpu = {
-      record: storageBuffer(device, units.rows * layout.record.words * 4),
-      text: storageBuffer(device, batch.text),
-      lines: storageBuffer(device, batch.lines),
-      scratch: storageBuffer(device, units.rows * lbWordsPerRow * 4),
-    }
-    await dispatchUnits(units, gpu, stepsPerDispatch)
-    return gpu
-  }
-  // Runs some lines of the batch again, whole, into the record of `gpu`: the lite version's fallback when the record of
-  // a chunked line made a driver run fail.
-  const rerunLines = async (batch: LineBatch, gpu: Buffers, lines: number[], stepsPerDispatch = 192) => {
-    const units = lines.flatMap(line => {
-      const n = batch.lines[line * 3 + 1]!
-      return [batch.lines[line * 3]!, n, 0, n + 1, batch.lines[line * 3 + 2]!, 0]
-    })
-    await dispatchUnits({units: Uint32Array.from(units), count: lines.length}, gpu, stepsPerDispatch)
+    return {record, text: textBuffer, lines: lineBuffer}
   }
   const readRecord = (record: GPUBuffer, rows: number, firstRow = 0) => readBuffer(device, record, firstRow * layout.record.words * 4, rows * layout.record.words * 4)
-  return {run, rerunLines, code, weights, pipeline: mainPipeline, readRecord}
+  return {run, code, weights, pipeline: mainPipeline, readRecord}
 }

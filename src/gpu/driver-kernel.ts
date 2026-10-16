@@ -28,8 +28,8 @@ export function packDriverTables(cells: CellLayout, stageLayout: Layout): Driver
   return {words, offsets}
 }
 
-export const jobWords = 9 // line, firstLine, start depth, first start frame, token base, tape base, tape capacity, segment start, segment end
-export const headerWords = 9 // tokCount, top, readDepth, tapeLen, steps, status (0 done, 1 step limit, 2 tape full, 3 end chain too long), end frames, rest, lastEnd
+export const jobWords = 7 // line, firstLine, start depth, first start frame, token base, tape base, tape capacity
+export const headerWords = 8 // tokCount, top, readDepth, tapeLen, steps, status (0 done, 1 step limit, 2 tape full, 3 end chain too long), end frames, rest
 export const endFrames = 32 // the frames a line leaves on top of its start, at most
 export const resultWords = headerWords + endFrames * 5
 export const startFrameWords = 5
@@ -137,7 +137,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let tokenBase = jobs[job * ${jobWords}u + 4u];
   let tapeBase = jobs[job * ${jobWords}u + 5u];
   let tapeCapacity = jobs[job * ${jobWords}u + 6u];
-  let segStart = f32(jobs[job * ${jobWords}u + 7u]);
   var full = false;
   let textStart = lines[line * 3u];
   let n = lines[line * 3u + 1u];
@@ -154,13 +153,7 @@ ${scalarRegisters.map(name => `  var r_${name}: f32 = 0.0f;`).join('\n')}
   r_top = -1.0f;
   r_readDepth = 1.0f;
   r_lastMeta = -1.0f;
-  r_anchor = select(-1.0f, 0.0f, starts[startBase + 2u] != 0 && segStart == 0.0f);
-  r_firstLine = select(0.0f, r_firstLine, segStart == 0.0f);
-  r_linePos = segStart;
-  r_q = segStart;
-  r_lastEnd = segStart;
-  r_lastTokStart = segStart;
-  r_segEnd = f32(jobs[job * ${jobWords}u + 8u]);
+  r_anchor = select(-1.0f, 0.0f, starts[startBase + 2u] != 0);
 ${frameFields.map(f => `  var tf_${f}: f32;\n  var af_${f}: f32;\n  var w_${f}: f32;`).join('\n')}
   var tokenEnable: f32; var tokenIndex: f32; var tokenStart: f32; var tokenMeta: f32; var frameEnable: f32;
   var clsQ: f32;
@@ -250,15 +243,13 @@ ${frameFields.map((field, i) => `      tape[at + ${i}u] = i32(w_${field});`).joi
   headers[h + 5u] = select(select(select(0, 1, r_mode != ${mode.done}.0f), 2, full), 3, endRef >= 0.0f);
   headers[h + 6u] = i32(endCount);
   headers[h + 7u] = select(-1, i32(-endRef) - 1, endRef < 0.0f && endRef != NOPARENT);
-  headers[h + 8u] = i32(r_lastEnd);
 }
 `
 }
 
-// A job runs a whole line, or, in the lite version, a segment of it (see lineStart).
-export type DriverJob = {line: number, firstLine: boolean, start: FrameKeyLike[], segment?: {start: number, end: number}}
+export type DriverJob = {line: number, firstLine: boolean, start: FrameKeyLike[]}
 type FrameKeyLike = {rule: number, endVariant: number, capturedEOL: number, nameTheme: number, contentTheme: number}
-export type DriverResult = {tokens: {start: number, meta: number}[], pushed: FrameKeyLike[], rest: number, top: number, readDepth: number, steps: number, status: number, lastEnd: number}
+export type DriverResult = {tokens: {start: number, meta: number}[], pushed: FrameKeyLike[], rest: number, top: number, readDepth: number, steps: number, status: number}
 
 // `experts` make tokens; `plainExperts` (buildExperts with tokens false) run the jobs that make none.
 export async function createDriver(device: GPUDevice, experts: Expert[], plainExperts: Expert[], cells: CellLayout, stageLayout: Layout) {
@@ -292,7 +283,6 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
       part.forEach((job, i) => {
         const n = lengths[job.line]!
         const capacity = n + 16
-        const segStart = job.segment?.start ?? 0
         const at = i * jobWords
         jobWordsArray[at] = job.line
         jobWordsArray[at + 1] = job.firstLine ? 1 : 0
@@ -301,8 +291,6 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
         jobWordsArray[at + 4] = tokenBase
         jobWordsArray[at + 5] = tapeBase
         jobWordsArray[at + 6] = capacity
-        jobWordsArray[at + 7] = segStart
-        jobWordsArray[at + 8] = job.segment?.end ?? n + 1
         for (const key of job.start) {
           starts[startAt] = key.rule
           starts[startAt + 1] = key.endVariant
@@ -311,8 +299,7 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
           starts[startAt + 4] = key.contentTheme
           startAt += startFrameWords
         }
-        // A run's tokens start at or after its segment's start, except one at 0 when the run made none.
-        if (storeTokens) tokenBase += n + 1 - segStart
+        if (storeTokens) tokenBase += n + 1
         tapeBase += capacity * tapeFrameWords
       })
       const jobBuffer = buffer('jobs', jobWordsArray.byteLength)
@@ -351,7 +338,7 @@ export async function createDriver(device: GPUDevice, experts: Expert[], plainEx
           const at = h + headerWords + k * 5
           pushed.push({rule: headers[at]!, endVariant: headers[at + 1]!, capturedEOL: headers[at + 2]!, nameTheme: headers[at + 3]!, contentTheme: headers[at + 4]!})
         }
-        results.push({tokens: lineTokens, pushed, rest: headers[h + 7]!, top: headers[h + 1]!, readDepth: headers[h + 2]!, steps: headers[h + 4]!, status: headers[h + 5]!, lastEnd: headers[h + 8]!})
+        results.push({tokens: lineTokens, pushed, rest: headers[h + 7]!, top: headers[h + 1]!, readDepth: headers[h + 2]!, steps: headers[h + 4]!, status: headers[h + 5]!})
       })
     }
     return results
