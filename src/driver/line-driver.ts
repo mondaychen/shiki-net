@@ -328,22 +328,44 @@ type Stack = StackNode | null
 const push = (key: number, below: Stack): StackNode => ({key, below, length: (below?.length ?? 0) + 1})
 const drop = (stack: Stack, count: number): Stack => { for (let i = 0; i < count && stack; i++) stack = stack.below; return stack }
 
+// The groups of lines that share runs: lines with the same text, except line 0, whose run uses the first-line scanners.
+// A group's id is its first line.
+export function lineGroups(lines: string[]): number[] {
+  const first = new Map<string, number>()
+  return lines.map((line, i) => {
+    if (i === 0) return 0
+    let group = first.get(line)
+    if (group === undefined) { group = i; first.set(line, i) }
+    return group
+  })
+}
+
+// A group's runs by the frames they read, from the top frame down. At the node of a path, `valid` is the first run that
+// read exactly the frames of the path, and `first` is the first run whose read frames start with the path.
+type Trie = {next: Map<number, Trie> | null, valid: number, first: number}
+const trieNode = (): Trie => ({next: null, valid: -1, first: -1})
+
 // The host's part: lines run in parallel from predicted starts, and the stitch picks each line's run along the chain.
 //
-// A run of a line is valid for a start when the start agrees with the run's prefix in every frame the run read. Each
-// round walks the lines: a line with a valid run takes it; another line gets one job, from its predicted start (up to
-// maxDepth frames, or all when its runs read deeper), and its effect is predicted from the run whose prefix agrees
-// longest. The rounds end when a walk finds every line valid. That chain is exact: line 0 starts from the root, and a
-// valid run's end is exact when its start is. Each round, the first invalid line has an exact start, so it is valid
-// after its run, and the rounds end. A walk starts at the first line that got a run in the round, since the lines
-// before it kept their runs and their starts. In the same way, a line that got no run and kept its start (the same
-// stack object) keeps its choice and its end, and so do the lines after it up to the next line that got a run: the
-// walk jumps over them.
+// A run depends only on the line's text, the first-line flag and the frames it read, so the lines of a group (see
+// lineGroups) share their runs. A run is valid for a start when the start agrees with the run's prefix in every frame
+// the run read. Each round walks the lines: a line with a valid run takes it; another line gets a job, from its
+// predicted start (up to maxDepth frames, or all when its runs read deeper), and its effect is predicted from the run
+// whose prefix agrees longest. Lines of a group with the same job in a round share one job. The rounds end when a walk
+// finds every line valid. That chain is exact: line 0 starts from the root, and a valid run's end is exact when its
+// start is. Each round, the first invalid line has an exact start, so it is valid after its run, and the rounds end. A
+// walk starts at the first line that got a run in the round, since the lines before it kept their runs and their
+// starts. In the same way, a line that got no run and kept its start (the same stack object) keeps its choice and its
+// end, and so do the lines after it up to the next line that got a run: the walk jumps over them.
+//
+// `runLines` gets one line of each job's group. In the result, `choices` names each line's run: lines with the same
+// choice have the same tokens.
 export async function stitchLines(
   lineCount: number, rootKey: FrameKey,
   runLines: (lines: number[], starts: FrameKey[][]) => Promise<LineResult[]>,
+  groupOf: ArrayLike<number> = Array.from({length: lineCount}, (_, line) => line),
   maxDepth = 64,
-): Promise<{results: LineResult[], prefixes: FrameKey[][], rounds: number, runs: number}> {
+): Promise<{results: LineResult[], prefixes: FrameKey[][], choices: number[], rounds: number, runs: number}> {
   // Keys are interned by a number made of their fields: names and themes are below 2^16, and the end variant below 16.
   const keyIds = new Map<number, number>()
   const keys: FrameKey[] = []
@@ -354,12 +376,17 @@ export async function stitchLines(
     return id
   }
   const root = push(idOf(rootKey), null)
-  const runs: {prefix: number[], keys: FrameKey[], pushed: number[], result: LineResult}[][] = Array.from({length: lineCount}, () => [])
+  // Per group, indexed by the group's id.
+  const runs: {id: number, prefix: number[], keys: FrameKey[], pushed: number[], result: LineResult}[][] = Array.from({length: lineCount}, () => [])
+  const tries: Trie[] = Array.from({length: lineCount}, trieNode)
   const starts: StackNode[] = new Array(lineCount).fill(root)
   const chosen: number[] = new Array(lineCount).fill(-1)
   const ends: Stack[] = new Array(lineCount).fill(null)
   const fresh = new Uint8Array(lineCount)
-  let jobs: {line: number, prefix: number[]}[] = Array.from({length: lineCount}, (_, line) => ({line, prefix: [root.key]}))
+  let jobs: {line: number, prefix: number[]}[] = []
+  for (let line = 0; line < lineCount; line++) if (groupOf[line] === line) jobs.push({line, prefix: [root.key]})
+  // The lines whose group's job ran for them too.
+  let sharing: number[] = Array.from({length: lineCount}, (_, line) => line).filter(line => groupOf[line] !== line)
   let rounds = 0
   let total = 0
   for (;;) {
@@ -369,14 +396,30 @@ export async function stitchLines(
     const out = await runLines(jobs.map(job => job.line), jobKeys)
     fresh.fill(0)
     jobs.forEach((job, k) => {
-      runs[job.line]!.push({prefix: job.prefix, keys: jobKeys[k]!, pushed: out[k]!.pushed.map(idOf), result: out[k]!})
+      const group = groupOf[job.line]!
+      const result = out[k]!
+      const index = runs[group]!.length
+      runs[group]!.push({id: total - jobs.length + k, prefix: job.prefix, keys: jobKeys[k]!, pushed: result.pushed.map(idOf), result})
+      // A run that agrees with a start in the frames it read is valid, so its path stops at its read depth.
+      let node = tries[group]!
+      if (node.first < 0) node.first = index
+      for (let j = 0; j < Math.min(job.prefix.length, result.readDepth); j++) {
+        let child = node.next?.get(job.prefix[j]!)
+        if (!child) { child = trieNode(); (node.next ??= new Map()).set(job.prefix[j]!, child) }
+        node = child
+        if (node.first < 0) node.first = index
+        if (j + 1 === result.readDepth && node.valid < 0) node.valid = index
+      }
       fresh[job.line] = 1
     })
+    for (const line of sharing) fresh[line] = 1
     // The lines that got a run, in order.
-    const freshLines = jobs.map(job => job.line).sort((x, y) => x - y)
+    const freshLines = [...jobs.map(job => job.line), ...sharing].sort((x, y) => x - y)
     const first = freshLines[0]!
     let nextFresh = 0
     jobs = []
+    sharing = []
+    const roundJobs = new Set<string>()
     let stack: Stack = starts[first]!
     for (let line = first; line < lineCount; line++) {
       if (!stack) stack = root
@@ -389,16 +432,18 @@ export async function stitchLines(
       }
       starts[line] = stack
       chosen[line] = -1
-      let best = -1
-      let bestLength = -1
-      const lineRuns = runs[line]!
-      for (let k = 0; k < lineRuns.length; k++) {
-        const {prefix, result} = lineRuns[k]!
-        let length = 0
-        let node: Stack = stack
-        while (length < prefix.length && node && prefix[length] === node.key) { length++; node = node.below }
-        if (result.readDepth <= length) { chosen[line] = k; break }
-        if (length > bestLength) { best = k; bestLength = length }
+      // Down the trie along the stack: the first valid run, or else the run whose prefix agrees longest.
+      const group = groupOf[line]!
+      const lineRuns = runs[group]!
+      let node = tries[group]!
+      let best = node.first
+      for (let below: Stack = stack; ;) {
+        if (node.valid >= 0) { chosen[line] = node.valid; break }
+        const child = below && node.next?.get(below.key)
+        if (!child) break
+        node = child
+        best = node.first
+        below = below!.below
       }
       if (chosen[line]! >= 0) {
         const {result, pushed} = lineRuns[chosen[line]!]!
@@ -410,7 +455,9 @@ export async function stitchLines(
         const depth = needed > maxDepth ? stack.length : Math.min(stack.length, maxDepth)
         const prefix: number[] = []
         for (let node: Stack = stack; node && prefix.length < depth; node = node.below) prefix.push(node.key)
-        jobs.push({line, prefix})
+        const jobKey = `${group}:${prefix.join(',')}`
+        if (roundJobs.has(jobKey)) sharing.push(line)
+        else { roundJobs.add(jobKey); jobs.push({line, prefix}) }
         if (best >= 0) {
           // A run that popped past its prefix's bottom popped the whole prefix, and the predicted frames below come next.
           const {prefix: bestPrefix, result, pushed} = lineRuns[best]!
@@ -423,8 +470,9 @@ export async function stitchLines(
     }
     if (jobs.length === 0) {
       return {
-        results: chosen.map((k, line) => runs[line]![k]!.result),
-        prefixes: chosen.map((k, line) => runs[line]![k]!.keys),
+        results: chosen.map((k, line) => runs[groupOf[line]!]![k]!.result),
+        prefixes: chosen.map((k, line) => runs[groupOf[line]!]![k]!.keys),
+        choices: chosen.map((k, line) => runs[groupOf[line]!]![k]!.id),
         rounds, runs: total,
       }
     }

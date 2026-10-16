@@ -32,26 +32,25 @@ Now the network takes 0.53 s for lodash and 0.97 s for three.min.js. The best or
 15. **Done: stage A as a handwired circuit.** `src/net/stage-a-circuit.ts` builds the forward step and the backward step of stage A with handwired's `Circuit`. `pnpm check:stage-a-circuit` runs them with handwired's tensor evaluator and compares them with the dense CPU evaluation. On 30,590 positions of the four fixtures, with the long lines of three.min.js, there are 0 differences. Thus all of the network is handwired in the same sense. The backward step has 47,846 live operations in 12 layers, and it does all of them at each position. The GPU kernel does not run this circuit, because the kernel works only on the bits that hold (about 1% of the nodes). handwired's row writer can write the circuit as WGSL, but that kernel would be much slower.
    - The atomic group's integer end became two bits for each body node (lessons.md, section 5). The kernel can use the same bits. Then it does not read the record at the end of the group.
 16. **Use the network as a model that can learn.** This is the purpose of handwired. Use the network as an exact front end, with fixed weights, for a model that learns. Or let its weights change, to learn a highlighter for a dialect that has no grammar.
-17. **A stitch that composes lines.** react-dom.development.js needs 347 rounds; lodash needs 84. The cause:
+17. **A stitch that composes lines.** react-dom.development.js needed 347 rounds, and lodash 84. Idea 18 made them 51 and 20. The cause:
    - Round 1 runs every line from the root. From the root, a line that closes something does not pop: `  268435456;` that ends a multi-line `var X =`, or `  }` that ends a function. The openers still push. So the chain that round 2 predicts collects frames that are never popped, and many of its stacks are 64 frames deep.
    - After that, the chain past the frontier stays wrong but consistent with the old runs: most lines read only the top frame, and their top frames agree. The error shows only when the frontier gets to a closer, which reads below the top. So each round fixes about one closer: one function, or one `var` group of three lines.
    - A test gave the stitch the most frequent prefixes that runs read (from the final result, so this is the best case), and ran every line from each of them in round 2. With 8 prefixes: 86 rounds, and the rounds and the stitch took 356 ms, not 479 ms. With 16 prefixes: 23 rounds, but 632 ms, because of 450K extra runs. So more candidate starts are not a good fix.
    - The real fix is a different algorithm. A line is a function of the frames that it reads: it pops k frames and pushes others. Compose these functions in a parallel prefix tree, about 15 levels for 30K lines. The difficult part is a line whose function has many cases, one for each set of frames that it can read. This is research work, of several days.
-   - Idea 18 is a partial fix that is much easier.
+   - Idea 18 is a partial fix that was much easier.
 
 ## Duplicates, convergence and overlap
 
-These ideas came from a second look at the code and the fixtures. A quick test of idea 18 is below. The other ideas have only counts.
+These ideas came from a second look at the code and the fixtures. Ideas 20 to 24 have only counts.
 
-18. **Lines with the same text share their runs.** A run depends only on the line's text, the `firstLine` flag and the frames that it reads. So a run of one `  }` line is also a valid run for each other `  }` line with the same frames on top. Now `stitchLines` keeps the runs for each line, so the same closer must fail again in each round. Only 47% of lodash's lines are distinct, and 62% of react-dom's. A quick test grouped the lines by their text (line 0 stays alone), kept one list of runs for each group, and found valid runs through an index on the frames that each run read. The result stayed identical to shiki. The best of 4 calls, on a noisy machine:
+18. **Done: lines with the same text share their runs.** A run depends only on the line's text, the `firstLine` flag and the frames that it reads. So a run of one `  }` line is also a valid run for each other `  }` line with the same frames on top. Only 47% of lodash's lines are distinct, and 62% of react-dom's. `stitchLines` now keeps one trie of runs for each group of lines with the same text (line 0 stays alone). The best of 4 calls, alternating with the earlier version:
 
     | File | Rounds | Line runs | Driver |
     | --- | --- | --- | --- |
-    | lodash | 84 → 20 | 56K → 42K | about 170 ms → 80 ms |
-    | react-dom | 347 → 51 | 72K → 57K | about 400 ms → 185 ms |
-    | react | 48 → 7 | 9.2K → 6.7K | about 50 ms → 21 ms |
+    | lodash | 84 → 20 | 56K → 31K | about 130 ms → 60 ms |
+    | react-dom | 347 → 51 | 72K → 46K | about 380 ms → 130 ms |
+    | react | 48 → 7 | 9.2K → 5.7K | about 50 ms → 19 ms |
 
-    The test's index made a string key for each line and each depth, so the host's stitch on lodash went from about 260 ms to 480 ms. Numeric keys or a trie can fix this. Two lines of a group with the same job in a round need only one job.
 19. **Stage A once for each distinct line.** A line's record depends only on its text, but `batchLines` sends every line. The distinct lines are 68% of lodash's code points, 82% of react-dom's and 88% of react's. lodash's stage A is limited by throughput, so it can become up to about 30% faster. A line then reads the record of the first line with the same text.
 20. **Segments inside long lines for stage A.** Idea 11 divides long lines for the driver. Stage A has the same problem: three.min.js's stage A (about 0.6 s) ends with its longest line alone. Calculate each segment backward from a guessed state at its right end, for example the state after a short warm-up. When the true state from the next segment is known, calculate again from it, and stop when the new state is equal to the guessed run's state at the same position. From there, all earlier states are equal, because the step is deterministic. The states of regex automata usually become equal after a few positions. The forward pass of the lookbehinds can use the same method. For three.min.js, this is probably the largest gain.
 21. **The token run during the last rounds.** After a round, every line before the first invalid line is final. Its token run can start with the next round, when the GPU is mostly idle. On three.min.js, the token run waits about 45 ms for the longest line. When that line becomes final early, its token run can go into an earlier dispatch.

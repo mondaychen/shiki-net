@@ -114,7 +114,9 @@ A line's run depends on its start stack only through the frames that it reads: t
 2. Walk the lines in order. A line is valid when its start agrees with its prediction in every frame that it read. A valid line's end is the next line's start.
 3. Run each invalid line again from its new predicted start. Repeat until a walk finds every line valid.
 
-The final chain is exact by induction: line 0 starts from the root, and a valid line's end is exact when its start is exact. Each round, the first invalid line has an exact start. Thus it is valid after its run, and the rounds stop. lodash needs 84 rounds and three.min.js needs 64. Most rounds run few lines. The host only compares frame keys and joins stacks. It does no tokenizing.
+The final chain is exact by induction: line 0 starts from the root, and a valid line's end is exact when its start is exact. Each round, the first invalid line has an exact start. Thus it is valid after its run, and the rounds stop. Most rounds run few lines.
+
+A run depends only on the line's text, the first-line flag and the frames that it read. So lines with the same text share their runs: a run of one `  }` line is also valid for every other `  }` line that has the same frames on top. Each group of these lines keeps its runs in a trie, by the frames that each run read, and two lines of a group with the same job in a round get one job. lodash needs 20 rounds, three.min.js 64 and react-dom.development.js 51. The token run also runs each chosen run only once. The host only compares frame keys and joins stacks. It does no tokenizing.
 
 ### Decode
 

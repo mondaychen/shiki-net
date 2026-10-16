@@ -63,8 +63,10 @@ A push of a scope depends on the token attributes, and on which theme selectors 
   | A run that popped past its predicted prefix "collapsed" the predicted stack to the root | 1,042 | 280 |
   | That run means "the whole prefix popped" | 344 | 268 |
   | Validity by the frames read, jobs from the full predicted stack | 84 | 64 |
+  | Lines with the same text share their runs | 20 | 64 |
 
 - **A run that falls off its start must count as invalid.** A run that pops past the bottom of a short predicted stack has read a frame that its start does not have. The first version continued from a dummy frame and accepted the result. That error changed lodash line 1548, and the end-to-end check found it.
+- **Lines with the same text share their runs.** Without this, the same closer line (`  }`) failed again in each round, because each line kept only its own runs. With one trie of runs for each text, react-dom.development.js went from 347 rounds to 51, and react.development.js from 48 to 7. three.min.js has no lines with the same text, so it does not change. Idea 17 in ideas.md tells why the closers cost rounds.
 - **Data shapes the method.** In lodash, 84% of lines read only the top frame, and there are 15 distinct top frames. three.min.js is one large expression in 966 lines. Its lines read up to 16 frames deep, and it has 247 distinct start stacks.
 
 ## 7. WebGPU and the platform
@@ -154,4 +156,7 @@ The changes below took the network from 2.1 s to 0.44 s on lodash, and from 4.2 
 ### The host
 
 - **Interned keys as numbers.** The stitch made a string for each frame of each prefix of each job. A number made of the fields replaced the string, and the job prefixes are now key ids. The stitch on lodash went from 320 ms to 130 ms.
+- **Lines with the same text share their runs.** Only 47% of lodash's lines are distinct, and 62% of react-dom's. A run depends only on the text, the first-line flag and the frames that it read, so a group of lines with the same text keeps one list of runs. Line runs went from 56K to 31K on lodash and from 72K to 46K on react-dom. The driver went from about 130 ms to 60 ms on lodash, and from about 380 ms to 130 ms on react-dom (best of 4 calls, alternating with the earlier version). The final token run is also one run for each distinct choice.
+  - A first version found the runs with a string key for each line and each depth. The stitch on lodash took about 480 ms. Now each group has a trie of its runs, by the frames that each run read.
+  - The trie first kept the whole prefix of each job, up to 64 frames. The garbage collector then took most of the host's time. A run that agrees with a start in the frames that it read is valid, so a path needs only the frames that its run read. The best prediction does not change, because a run that agrees deeper than its read depth is valid.
 - **Jump over the lines that do not change.** A line that got no run in a round, and whose start is the same stack object, keeps its choice and its end. So do the lines after it, up to the next line that got a run. The walk jumps over them. The stitch on lodash went from 130 ms to 60 ms, with the same rounds.

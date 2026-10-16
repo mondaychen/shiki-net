@@ -12,7 +12,7 @@ import {compileStageA} from './net/stage-a.ts'
 import {buildLayout} from './net/layout.ts'
 import {buildDriverTables} from './driver/driver-tables.ts'
 import {buildExperts, cellLayout} from './driver/circuit.ts'
-import {stitchLines, type FrameKey, type LineResult} from './driver/line-driver.ts'
+import {lineGroups, stitchLines, type FrameKey, type LineResult} from './driver/line-driver.ts'
 import {createStageA, batchLines} from './gpu/stage-a-kernel.ts'
 import {createDriver} from './gpu/driver-kernel.ts'
 import {decodeTokens, tokenizedLines} from './decode.ts'
@@ -50,9 +50,14 @@ export async function createGpuHighlighter(device: GPUDevice, lang: BundledLangu
       return out as LineResult[]
     }
     t0 = performance.now()
-    // Rounds of runs from predicted starts, without tokens; then the chosen run of every line again, with tokens.
-    const {prefixes, rounds, runs} = await stitchLines(lines.length, rootKey, (which, starts) => runDriver(which.map((line, k) => ({line, start: starts[k]!})), false))
-    const results = await runDriver(prefixes.map((start, line) => ({line, start})), true)
+    // Rounds of runs from predicted starts, without tokens; then each chosen run again, with tokens. Lines with the
+    // same text share runs, and lines with the same choice share the run with tokens.
+    const {prefixes, choices, rounds, runs} = await stitchLines(lines.length, rootKey, (which, starts) => runDriver(which.map((line, k) => ({line, start: starts[k]!})), false), lineGroups(lines))
+    const tokenRun = new Map<number, number>()
+    const tokenJobs: {line: number, start: FrameKey[]}[] = []
+    choices.forEach((choice, line) => { if (!tokenRun.has(choice)) { tokenRun.set(choice, tokenJobs.length); tokenJobs.push({line, start: prefixes[line]!}) } })
+    const tokenResults = await runDriver(tokenJobs, true)
+    const results = choices.map(choice => tokenResults[tokenRun.get(choice)!]!)
     const stitch = performance.now() - t0 - driverMs
     t0 = performance.now()
     const tokens = decodeTokens(code, results.map(r => r.tokens), t.metaValues, tables.colorMap)

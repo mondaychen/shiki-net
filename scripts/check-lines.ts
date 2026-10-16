@@ -7,7 +7,7 @@ import {Program} from '../src/regex/program.ts'
 import {compileStageA} from '../src/net/stage-a.ts'
 import {buildLayout} from '../src/net/layout.ts'
 import {buildDriverTables} from '../src/driver/driver-tables.ts'
-import {runLine, endStack, stitchLines, type FrameKey, type RecordRow} from '../src/driver/line-driver.ts'
+import {runLine, endStack, lineGroups, stitchLines, type FrameKey, type RecordRow} from '../src/driver/line-driver.ts'
 import {requestDevice} from '../src/gpu/node-device.ts'
 import {createStageA, batchLines} from '../src/gpu/stage-a-kernel.ts'
 import {decodeTokens, tokenizedLines} from '../src/decode.ts'
@@ -50,7 +50,7 @@ for (const file of files.length ? files : ['fixtures/lodash.js', 'fixtures/three
   const lengths = lines.map(line => [...line].length + 1)
   const t0 = performance.now()
   const runner = async (which: number[], starts: FrameKey[][]) => which.map((line, k) => runLine(t, lengths[line]!, line === 0, starts[k]!, rowAt(line)))
-  const {results, rounds, runs} = await stitchLines(lines.length, rootKey, runner)
+  const {results, rounds, runs} = await stitchLines(lines.length, rootKey, runner, lineGroups(lines))
   const ms = performance.now() - t0
   const ours = decodeTokens(code, results.map(r => r.tokens), t.metaValues, tables.colorMap)
   const expected = tables.highlighter.codeToTokens(code, {lang: 'javascript', theme: 'github-dark'}).tokens
