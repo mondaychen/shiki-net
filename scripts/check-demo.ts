@@ -1,6 +1,6 @@
 // The demo page in a headless Chrome with WebGPU: every file of its list, JavaScript and TypeScript, each compared
-// with shiki by the page; then three.min.js and scanner.ts again with the lite version, which must not fail but may
-// differ from shiki.
+// with shiki by the page; then three.min.js, the minified react-dom and scanner.ts again with the lite version, which
+// must not fail but may differ from shiki.
 // Usage: node scripts/check-demo.ts [--built]. --built checks the page in dist/ (pnpm demo:build) and not the dev
 // server's. CHROME_PATH names another Chrome binary.
 import {createServer, preview} from 'vite'
@@ -31,7 +31,7 @@ try {
     return statusText()
   }
   console.log(await waitFor(/Ready|Error|no WebGPU|no GPU/, 60_000).catch(async () => `not ready after 60 s: ${await statusText()}`))
-  const runs = [...['sample', 'lodash', 'three', 'sampleTs', 'scanner', 'es5'].map(which => ({which, lite: false})), {which: 'three', lite: true}, {which: 'scanner', lite: true}]
+  const runs = [...['sample', 'lodash', 'three', 'reactDomMin', 'sampleTs', 'scanner', 'es5'].map(which => ({which, lite: false})), ...['three', 'reactDomMin', 'scanner'].map(which => ({which, lite: true}))]
   for (const {which, lite} of runs) {
     await page.select('#version', lite ? 'lite' : 'full')
     await page.click(`[data-load="${which}"]`)

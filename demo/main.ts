@@ -171,6 +171,7 @@ const files: Record<string, {name: string, lang: BundledLanguage, text: () => Pr
   sample: {name: 'sample.js', lang: 'javascript', text: async () => sample},
   lodash: {name: 'lodash.js', lang: 'javascript', text: async () => (await import('../fixtures/lodash.js?raw')).default},
   three: {name: 'three.min.js', lang: 'javascript', text: async () => (await import('../fixtures/three.min.js?raw')).default},
+  reactDomMin: {name: 'react-dom.development.min.js', lang: 'javascript', text: async () => (await import('../fixtures/minified/react-dom.development.min.js?raw')).default},
   sampleTs: {name: 'sample.ts', lang: 'typescript', text: async () => sampleTs},
   scanner: {name: 'scanner.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/scanner.ts?raw')).default},
   es5: {name: 'lib.es5.d.ts', lang: 'typescript', text: async () => (await import('../fixtures/typescript/lib.es5.d.ts?raw')).default},
@@ -302,7 +303,9 @@ async function main() {
       setStatus('Running shiki on the CPU, for the comparison…', 'busy')
       await paint()
       t1 = performance.now()
-      const expected = highlighter.shiki.codeToTokens(text, {lang: highlighter.lang, theme: highlighter.theme}).tokens
+      // By default, shiki stops a line after 500 ms and gives the rest of it one plain token; the network has no such
+      // limit. Minified code has lines that take longer, so the comparison is with shiki without the limit.
+      const expected = highlighter.shiki.codeToTokens(text, {lang: highlighter.lang, theme: highlighter.theme, tokenizeTimeLimit: 0}).tokens
       const shikiMs = performance.now() - t1
       shiki.set('total', ms(shikiMs))
       shiki.root.dataset.state = 'done'
@@ -313,7 +316,7 @@ async function main() {
       } else if (lite) {
         // The lite version can differ from shiki; this is not an error.
         const share = sameCharacters(expected, tokens)
-        setStatus(`Lite version: ${differing.length} lines differ from shiki, e.g. ${differing.slice(0, 10).join(', ')}. ${(100 * share).toFixed(share > 0.9999 ? 3 : 2)}% of characters are as shiki. In total time, ${speedup(networkMs, shikiMs)}.`)
+        setStatus(`Lite version: ${differing.length} ${differing.length === 1 ? 'line differs' : 'lines differ'} from shiki, e.g. ${differing.slice(0, 10).join(', ')}. ${(100 * share).toFixed(share > 0.9999 ? 3 : 2)}% of characters are as shiki. In total time, ${speedup(networkMs, shikiMs)}.`)
       } else {
         setStatus(`${differing.length} lines differ from shiki, e.g. ${differing.slice(0, 10).join(', ')}.`, 'bad')
       }

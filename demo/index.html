@@ -24,6 +24,7 @@
       <button data-load="sample" aria-current="true">sample.js</button>
       <button data-load="lodash">lodash.js</button>
       <button data-load="three">three.min.js</button>
+      <button data-load="reactDomMin">react-dom.min.js</button>
       <p class="group">TypeScript</p>
       <button data-load="sampleTs">sample.ts</button>
       <button data-load="scanner">scanner.ts</button>
@@ -94,7 +95,7 @@
       </header>
       <div class="breakdown">
         <p class="breakdown-title">Parts of the total</p>
-        <p class="note">One step: shiki's <code>codeToTokens</code>, in the main thread of this page. It runs after the network, so the two do not share the machine. The code above shows the network’s tokens.</p>
+        <p class="note">One step: shiki's <code>codeToTokens</code>, without its time limit of 500 ms per line, in the main thread of this page. It runs after the network, so the two do not share the machine. The code above shows the network’s tokens.</p>
       </div>
     </article>
   </section>
