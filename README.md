@@ -14,6 +14,8 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 | --- | --- | --- | --- | --- | --- |
 | [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.53 s | 0.5 s |
 | [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.97 s | 5.2 s |
+| [react@18.3.1 development](https://unpkg.com/react@18.3.1/umd/react.development.js) | 3,344 | 11,640 | identical | 0.16 s | 0.15 s |
+| [react-dom@18.3.1 development](https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js) | 29,925 | 102,423 | identical | 1.6 s | 1.4 s |
 
 Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 30%.
 
@@ -23,7 +25,7 @@ You need Node 24 or later, pnpm, and a GPU that WebGPU can use. The two handwire
 
 ```sh
 pnpm install
-pnpm test          # the network on the GPU against shiki, on both fixtures
+pnpm test          # the network on the GPU against shiki, on the four fixtures
 pnpm typecheck     # tsc, with handwired's imported code included
 ```
 
@@ -118,7 +120,7 @@ The final chain is exact by induction: line 0 starts from the root, and a valid 
 
 ## How the result is verified
 
-Each check compares two independent implementations. Each check runs on both fixtures unless the table says otherwise.
+Each check compares two independent implementations. `pnpm test` runs on the four fixtures. The other checks run on lodash and three.min.js unless the table says otherwise. Each script also takes file paths.
 
 | Command | Compares | Result |
 | --- | --- | --- |
@@ -170,5 +172,5 @@ Stage A takes about two thirds of the time: 0.36 s for lodash and 0.63 s for thr
 | `docs/lessons.md` | What the project taught us: semantics to copy, design decisions with their measurements, bugs, and WebGPU problems |
 | `src/decode.ts` | The network's output as shiki's tokens |
 | `scripts/` | The checks and the timers |
-| `fixtures/` | The two test files |
+| `fixtures/` | The four test files: lodash, three.min.js, and React's two development builds |
 | `generated/named-sets.json` | The members of Oniguruma's named sets |

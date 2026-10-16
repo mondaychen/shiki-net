@@ -6,7 +6,7 @@ import {requestDevice} from '../src/gpu/node-device.ts'
 
 const highlighter = await createGpuHighlighter(await requestDevice())
 const files = process.argv.slice(2)
-for (const file of files.length ? files : ['fixtures/lodash.js', 'fixtures/three.min.js']) {
+for (const file of files.length ? files : ['fixtures/lodash.js', 'fixtures/three.min.js', 'fixtures/react.development.js', 'fixtures/react-dom.development.js']) {
   const code = fs.readFileSync(file, 'utf8')
   let t0 = performance.now()
   const {tokens, timings} = await highlighter.codeToTokens(code)
