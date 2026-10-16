@@ -140,7 +140,7 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 }
 @media (max-width: 860px) {
   body { grid-template-rows: auto minmax(440px, 1fr) auto auto auto; }
-  .picker { grid-template-columns: minmax(0, 1fr); }
+  .picker { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .files { flex-direction: row; overflow-x: auto; padding: 0; border-right: 0; border-bottom: 1px dashed var(--border); }
   .files button { flex: none; }
   .files .group { display: none; }
