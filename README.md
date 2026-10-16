@@ -12,10 +12,10 @@ The test compares the network's `ThemedToken[][]` with shiki's `codeToTokens(cod
 
 | File | Lines | Tokens | Result | Network (GPU) | shiki (CPU) |
 | --- | --- | --- | --- | --- | --- |
-| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.53 s | 0.5 s |
-| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.97 s | 5.2 s |
-| [react@18.3.1 development](https://unpkg.com/react@18.3.1/umd/react.development.js) | 3,344 | 11,640 | identical | 0.16 s | 0.15 s |
-| [react-dom@18.3.1 development](https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js) | 29,925 | 102,423 | identical | 1.6 s | 1.4 s |
+| [lodash@4.17.21](https://unpkg.com/lodash@4.17.21/lodash.js) | 17,210 | 59,873 | identical | 0.44 s | 0.48 s |
+| [three@0.97.0 min](https://unpkg.com/three@0.97.0/build/three.min.js) | 967 | 116,082 | identical | 0.98 s | 5.4 s |
+| [react@18.3.1 development](https://unpkg.com/react@18.3.1/umd/react.development.js) | 3,344 | 11,640 | identical | 0.14 s | 0.15 s |
+| [react-dom@18.3.1 development](https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js) | 29,925 | 102,423 | identical | 1.16 s | 1.47 s |
 
 Times are from an Apple M2 Pro (19-core GPU, 16 GB), Node 24, WebGPU through the `webgpu` package (Dawn on Metal). The network time is the best of three calls. It includes stage A, all driver rounds, the host's stitch and the decode. It does not include the one-time compile of the weights and the shaders. Other work on the machine changes the times by up to about 30%.
 
@@ -152,7 +152,7 @@ Each check compares two independent implementations. `pnpm test` runs on the fou
 
 ## Performance
 
-Stage A takes about two thirds of the time: 0.36 s for lodash and 0.63 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. lodash's 16K lines fill the GPU, so its stage A is limited by throughput. three.min.js's stage A ends with its longest line alone, at about 26 µs per position. The driver takes 0.12 s for lodash and 0.32 s for three.min.js. There, a late round lasts as long as its longest line, about 1,500 steps at about 2 µs per step.
+Stage A takes about half to two thirds of the time: 0.23 s for lodash and 0.61 s for three.min.js. A workgroup does one position at a time, with about 10 barriers per position. lodash's 16K lines fill the GPU, so its stage A is limited by throughput. three.min.js's stage A ends with its longest line alone, at about 26 µs per position. The driver takes 0.13 s for lodash and 0.33 s for three.min.js. There, a late round lasts as long as its longest line, about 1,500 steps at about 2 µs per step. react-dom.development.js needs 347 rounds, because its predicted stacks become wrong before closing lines (docs/ideas.md, idea 17).
 
 [docs/lessons.md](docs/lessons.md) (section 10) tells what made the network four times faster than its first version, and what did not work.
 

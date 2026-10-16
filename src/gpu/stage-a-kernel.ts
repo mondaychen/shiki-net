@@ -126,6 +126,29 @@ export function packWeights(layout: Layout, lookaheadAutomata: number[]): StageA
   layout.mains.forEach((automaton, index) => {
     for (let i = layout.startStart[automaton]!; i < layout.startStart[automaton + 1]!; i++) mainItems.push(index, layout.startItems[i]!)
   })
+  // Pairs [code, item] per class: a char node holds at p only when the class at p is in its set, so an item can hold at
+  // p only when its target is a member of the class, accepts, or is the atomic node.
+  const byClass = (pairs: number[]) => {
+    const start: number[] = []
+    const kept: number[] = []
+    for (let c = 0; c <= layout.classCount; c++) {
+      start.push(kept.length / 2)
+      for (let i = 0; i < pairs.length; i += 2) {
+        const t = pairs[i + 1]! & 0xFFFF
+        const member = t !== acceptTarget && ((layout.memberMask[c * layout.nodeWords + (t >> 5)]! >>> (t & 31)) & 1) === 1
+        if (t === acceptTarget || t === layout.atomic?.node || member) kept.push(pairs[i]!, pairs[i + 1]!)
+      }
+    }
+    start.push(kept.length / 2)
+    return {start, kept}
+  }
+  const lookOnly = (level: Uint32Array) => level.length > 0 && Array.from(level).every(code => (code & 3) === 1)
+  const levelByClass = layout.levels.map((level, i) => lookOnly(level) ? byClass(levelEntries[i]!) : null)
+  const mainByClass = byClass(mainItems)
+  // A0's lookbehind start items [automaton index, item]: a target reached at p reads the class at p in the next step,
+  // so only targets that are members of it can continue.
+  const lbStartByClass = byClass(layout.lookbehindNodes.flatMap(({automaton}, index) =>
+    Array.from(layout.startItems.subarray(layout.startStart[automaton]!, layout.startStart[automaton + 1]!)).flatMap(item => [index, item])))
   // (entry << 8) | part: the 16-pattern chunks of every list, then of every \G list.
   const chunks: number[] = []
   const entries = [...Array.from({length: layout.listStart.length - 1}, (_, i) => i), ...Array.from(layout.gLists)]
@@ -221,6 +244,8 @@ export function packWeights(layout: Layout, lookaheadAutomata: number[]): StageA
     ['bodyIndexOf', bodyIndexOf],
   ]
   levelEntries.forEach((entries, i) => parts.push([`level${i}`, entries]))
+  levelByClass.forEach((lists, i) => { if (lists) parts.push([`level${i}Start`, lists.start], [`level${i}Pairs`, lists.kept]) })
+  parts.push(['mainStart', mainByClass.start], ['mainPairs', mainByClass.kept], ['lbStart', lbStartByClass.start], ['lbPairs', lbStartByClass.kept])
   levelGuards.forEach((guards, i) => parts.push([`levelGuards${i}`, guards]))
   levelLooks.forEach((looks, i) => parts.push([`levelLooks${i}`, looks]))
   const offsets: Record<string, number> = {}
@@ -260,14 +285,27 @@ export function stageAWgsl(layout: Layout, weights: StageAWeights, skip: Set<str
   const atomicBodyCode = !atomic ? '' : Array.from(layout.startItems.subarray(layout.startStart[atomic.body]!, layout.startStart[atomic.body + 1]!), item => {
     const g = item >>> 16
     const t = item & 0xFFFF
-    return t === acceptTarget ? `    if (end < 0 && guardC(${g}u)) { end = p; }` : `    if (end < 0 && guardC(${g}u)) { end = feC[${bodyIndexOf(t)}u]; }`
+    // Every item's end is read at once, with no branch, and then the first that is not -1 is taken.
+    return `    end = select(end, select(-1, ${t === acceptTarget ? 'p' : `feC[${bodyIndexOf(t)}u]`}, guardC(${g}u)), end < 0);`
   }).join('\n')
+  // The items after the group, as one expression of bits with no branch, so that all their loads start together.
+  const anyItem = (items: ArrayLike<number>, bit: (item: number) => string) => items.length ? Array.from(items, bit).join(' | ') : '0u'
   // A level whose tasks are all of one kind calls that kind's code directly, without runEntry's branches.
+  // A level whose tasks are all of one kind calls that kind's code directly, without runEntry's branches. A level of
+  // lookaheads reads only the items of the class at p (packWeights' byClass).
   const levelCode = layout.levels.map((level, i) => {
     const kinds = new Set(Array.from(level, code => code & 3))
-    const call = kinds.size === 1 && kinds.has(0) ? `guardEntry(code >> 2u, word);` : kinds.size === 1 && kinds.has(1) ? `lookEntry(code >> 2u, word);` : `runEntry(code, word, p, n, lineRecord);`
+    const skipped = `${off('levels')}${off(`level${i}`)}`
+    if (o[`level${i}Start`] !== undefined) return `
+    {
+      let first = W[${o[`level${i}Start`]}u + cls];
+      let count = W[${o[`level${i}Start`]}u + cls + 1u] - first;
+      for (var t = lid; ${skipped}t < count; t += ${threads}u) { let at = ${o[`level${i}Pairs`]}u + 2u * (first + t); lookEntry(W[at] >> 2u, W[at + 1u]); }
+    }
+    workgroupBarrier();`
+    const call = kinds.size === 1 && kinds.has(0) ? `guardEntry(code >> 2u, word);` : `runEntry(code, word, p, n, lineRecord);`
     return `
-    for (var t = lid; ${off('levels')}${off(`level${i}`)}t < ${len[`level${i}`]! / 2}u; t += ${threads}u) { let code = W[${o[`level${i}`]}u + 2u * t]; let word = W[${o[`level${i}`]}u + 2u * t + 1u]; ${call} }
+    for (var t = lid; ${skipped}t < ${len[`level${i}`]! / 2}u; t += ${threads}u) { let code = W[${o[`level${i}`]}u + 2u * t]; let word = W[${o[`level${i}`]}u + 2u * t + 1u]; ${call} }
     workgroupBarrier();`
   }).join('')
   return /* wgsl */ `
@@ -435,14 +473,11 @@ fn runEntry(code: u32, word: u32, p: i32, n: i32, lineRecord: u32) {
     // are constants of the grammar, written into the code, so that the one thread that runs it waits on no loads of them.
     var end = -1;
 ${atomicBodyCode}
-    var ok = false;
-    if (end == p) {
-      ok = ${atomic.afterEmpty.length ? Array.from(atomic.afterEmpty, item => `(guardC(${item >>> 16}u) && bitC(${item & 0xFFFF}u))`).join(' || ') : 'false'};
-    } else if (end > p) {
-      let at = lineRecord + u32(end);
-      ok = ${atomic.after.length ? Array.from(atomic.after, item => `(recordedGuard(at, ${item >>> 16}u) && recordedBit(at, ${item & 0xFFFF}u))`).join(' || ') : 'false'};
-    }
-    if (ok) { atomicOr(&okC[id >> 5u], 1u << (id & 31u)); }` : ''}
+    let at = lineRecord + u32(max(end, p));
+    let okEmpty = ${anyItem(atomic.afterEmpty, item => `(u32(guardC(${item >>> 16}u)) & u32(bitC(${item & 0xFFFF}u)))`)};
+    let okAfter = ${anyItem(atomic.after, item => `(u32(recordedGuard(at, ${item >>> 16}u)) & u32(recordedBit(at, ${item & 0xFFFF}u)))`)};
+    let ok = select(select(0u, okAfter, end > p), okEmpty, end == p);
+    if (ok != 0u) { atomicOr(&okC[id >> 5u], 1u << (id & 31u)); }` : ''}
   }
 }
 
@@ -483,15 +518,15 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) lid:
         let context = anchorContext(p, n, before, at);
         for (var w = lid; w < GPW; w += ${threads}u) { anchorRow[w] = W[${o.anchorRows}u + context * GPW + w]; }
         workgroupBarrier();
-        for (var a = lid; ${off('lb')}a < LB; a += ${threads}u) {
-          let automaton = W[${o.lbStartAutomaton}u + a];
-          for (var i = W[${o.startStart}u + automaton]; i < W[${o.startStart}u + automaton + 1u]; i++) {
-            let item = W[${o.startItems}u + i];
-            if (!anchorsHold(item >> 16u)) { continue; }
-            let t = item & 0xFFFFu;
-            if (t == ACCEPT) { atomicOr(&lbBits[a >> 5u], 1u << (a & 31u)); }
-            else { let k = t - LBFIRST; atomicOr(&reachNext[k >> 5u], 1u << (k & 31u)); }
-          }
+        let lbFirst = W[${o.lbStart}u + at];
+        let lbItems = W[${o.lbStart}u + at + 1u] - lbFirst;
+        for (var i = lid; ${off('lb')}i < lbItems; i += ${threads}u) {
+          let a = W[${o.lbPairs}u + 2u * (lbFirst + i)];
+          let item = W[${o.lbPairs}u + 2u * (lbFirst + i) + 1u];
+          if (!anchorsHold(item >> 16u)) { continue; }
+          let t = item & 0xFFFFu;
+          if (t == ACCEPT) { atomicOr(&lbBits[a >> 5u], 1u << (a & 31u)); }
+          else { let k = t - LBFIRST; atomicOr(&reachNext[k >> 5u], 1u << (k & 31u)); }
         }
         if (p > 0) {
           for (var k = lid; ${off('lb')}k < LBCOUNT; k += ${threads}u) {
@@ -605,11 +640,13 @@ ${Array.from({length: unroll}, (_, u) => `          if (${u ? `i + ${u * threads
         storageBarrier();
         workgroupBarrier();
     ${levelCode}
-        // Main start bits: one thread per start item.
-        for (var t = lid; ${off('mains')}t < ${len.mainItems! / 2}u; t += ${threads}u) {
-          let item = W[${o.mainItems}u + 2u * t + 1u];
+        // Main start bits: one thread per start item that can hold in the class at p.
+        let mainFirst = W[${o.mainStart}u + cls];
+        let mainCount = W[${o.mainStart}u + cls + 1u] - mainFirst;
+        for (var t = lid; ${off('mains')}t < mainCount; t += ${threads}u) {
+          let item = W[${o.mainPairs}u + 2u * (mainFirst + t) + 1u];
           if (bitC(item & 0xFFFFu)) {
-            let main = W[${o.mainItems}u + 2u * t];
+            let main = W[${o.mainPairs}u + 2u * (mainFirst + t)];
             if (guardC(item >> 16u)) { setMain(main); }
             if (guardGC(item >> 16u)) { setMain(MAINS + main); }
           }

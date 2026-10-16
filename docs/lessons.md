@@ -99,23 +99,24 @@ The confusion of constants with wires came from handwired's `Wire` type. A wire 
 
 ## 9. Where the time goes
 
-The first version took 1.8 s for lodash and 4.1 s for three.min.js. Section 10 tells how they became 0.53 s and 0.97 s (shiki: about 0.5 s and 5.2 s). Now:
+The first version took 1.8 s for lodash and 4.1 s for three.min.js. Section 10 tells how they became 0.44 s and 0.98 s (shiki: about 0.48 s and 5.4 s). Now:
 
-| | lodash | three.min.js |
-| --- | --- | --- |
-| Stage A | 0.36 s | 0.63 s |
-| Driver rounds and the token run | 0.12 s | 0.32 s |
-| Host stitch | 0.04 s | 0.01 s |
+| | lodash | three.min.js | react-dom.development.js |
+| --- | --- | --- | --- |
+| Stage A | 0.23 s | 0.61 s | 0.66 s |
+| Driver rounds and the token run | 0.13 s | 0.33 s | 0.37 s |
+| Host stitch | 0.06 s | 0.01 s | 0.08 s |
 
 - lodash's stage A is limited by throughput: 16K lines fill the GPU.
 - three.min.js's stage A is limited by its longest line (7,114 code points) at the end, when the other lines are complete.
+- react-dom.development.js's driver has 347 rounds. [ideas.md](ideas.md) (idea 17) tells why.
 - three.min.js's driver has 64 rounds. A late round runs a line of about 500 code points, about 1,500 steps at about 2 µs per step. The first three rounds and the token run each wait for the longest line (about 9,000 steps).
 
 [ideas.md](ideas.md) has the ideas that we did not try.
 
 ## 10. Performance work
 
-The changes below took the network from 2.1 s to 0.53 s on lodash, and from 4.2 s to 0.97 s on three.min.js. Every change kept the output identical, and every check in the README passed after it.
+The changes below took the network from 2.1 s to 0.44 s on lodash, and from 4.2 s to 0.98 s on three.min.js. Every change kept the output identical, and every check in the README passed after it.
 
 ### How to measure
 
@@ -137,6 +138,8 @@ The changes below took the network from 2.1 s to 0.53 s on lodash, and from 4.2 
   - The atomic group's `bodyIndex` searched 20 global words for each item, in one thread. A table, and then constants in the shader code, made one line 20% faster.
   - In A0, a guard list's anchors depend only on 7 bits of context. A table of guard bits per context replaced a loop over predicates.
 - **A long line needs latency, not throughput.** The state of each line waits in a buffer between dispatches. So the last dispatches, where at most 8 lines are still running, use a second pipeline with 1024 threads per workgroup. One line then takes 26 µs per position, not 38 µs. Stage A on three.min.js went from about 650 ms to 540 ms. lodash does not change.
+- **Check only the items that can hold in the class at p.** A char node holds at p only when the class at p is in its set. So an item can hold only when its target is a member of the class, accepts, or is the atomic node. Lists per class of the lookahead start items (85 of 1,011 for each class, on average), of the main start items (185 of 907) and of A0's lookbehind start items made stage A on lodash about 20% faster, and on react-dom about 30% faster.
+- **No branches in the atomic group.** One thread runs the atomic group, and its checks stopped at the first match, so its loads came one after the other. Selects without branches let all its loads start together. The gain was a few percent, near the noise.
 
 ### The driver
 
