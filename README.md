@@ -2,6 +2,8 @@
 
 shiki-net is shiki's JavaScript tokenizer as a handwired neural network. The network runs on the GPU. Its output is identical to shiki's `codeToTokens`.
 
+Demo: https://mondaychen.github.io/shiki-net/ (a browser with WebGPU, such as a recent Chrome)
+
 The network follows [handwired](https://github.com/chenglou/handwired): its operations are weighted sums, ReLU products (ReGLU) and table reads over float32 values. A compiler writes all weights from shiki's grammar and theme. There is no training. All values are bits or integers below 2^24, so each float32 operation is exact.
 
 ## Results
@@ -31,6 +33,8 @@ pnpm typecheck     # tsc, with handwired's imported code included
 pnpm demo          # Vite opens http://localhost:5173/demo/ in your browser
 pnpm demo:build    # writes the page to dist/, for a static host; the page is dist/demo/index.html
 ```
+
+At each push to `main`, `.github/workflows/pages.yml` builds the page and puts it on GitHub Pages.
 
 Use a recent Chrome, or another browser with WebGPU. The page compiles the weights and shaders in about 1.5 s. Then it highlights the code in the text box on your GPU, runs shiki on the same code and compares the two outputs. The buttons load the sample and the two fixtures. `pnpm check:demo` runs the page in a headless Chrome and gives the page's result for the sample and the two fixtures. `pnpm check:demo --built` does the same for the page in `dist/`.
 
