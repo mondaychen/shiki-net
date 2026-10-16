@@ -31,7 +31,7 @@
    When the window is too short for the code's minimum height, the page scrolls. */
 body {
   display: grid;
-  grid-template-rows: auto minmax(280px, 1fr) auto auto;
+  grid-template-rows: auto minmax(280px, 1fr) auto auto auto;
   min-height: 100vh;
   min-height: 100dvh;
   margin: 0 auto;
@@ -133,11 +133,14 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
   background: var(--surface);
 }
 @media (max-width: 860px) {
-  body { grid-template-rows: auto minmax(440px, 1fr) auto auto; }
+  body { grid-template-rows: auto minmax(440px, 1fr) auto auto auto; }
   .picker { grid-template-columns: minmax(0, 1fr); }
   .files { flex-direction: row; overflow-x: auto; padding: 0; border-right: 0; border-bottom: 1px dashed var(--border); }
   .files button { flex: none; }
 }
+/* The machine line, and under it the status line. */
+.machine { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.machine:not([hidden]) + #status { margin-top: 2px; }
 #status { display: flex; gap: 8px; align-items: center; min-height: 1.5em; margin: 8px 0; }
 #status .spinner { display: none; }
 #status.busy .spinner { display: inline-block; }

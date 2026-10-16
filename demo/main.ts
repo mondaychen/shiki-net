@@ -2,6 +2,7 @@
 import type {ThemedToken} from '@shikijs/types'
 import {createGpuHighlighter} from '../src/highlighter.ts'
 import {deviceFrom} from '../src/gpu/device.ts'
+import {describeMachine} from './machine.ts'
 
 const $ = <T extends HTMLElement>(selector: string, root: ParentNode = document) => root.querySelector(selector) as T
 const code = $<HTMLTextAreaElement>('#code')
@@ -160,13 +161,22 @@ for (const button of fileButtons) {
 }
 code.addEventListener('input', () => { fileInfo.textContent = `${lineCount()}, edited` })
 
+// The machine line in the header. A failure here does not stop the page.
+async function showMachine(adapter: GPUAdapter | null) {
+  const machine = $<HTMLParagraphElement>('#machine')
+  machine.textContent = `This machine: ${await describeMachine(adapter)}`
+  machine.hidden = false
+}
+
 async function main() {
   await openFile('sample')
   if (!('gpu' in navigator)) {
+    showMachine(null).catch(console.error)
     setStatus('This browser has no WebGPU. Use a recent Chrome, or enable WebGPU in its flags.', 'bad')
     return
   }
   const adapter = await navigator.gpu.requestAdapter()
+  showMachine(adapter).catch(console.error)
   if (!adapter) {
     setStatus('WebGPU found no GPU adapter.', 'bad')
     return
